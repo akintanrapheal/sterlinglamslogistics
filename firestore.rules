@@ -3,15 +3,19 @@ rules_version = '2';
 // ─────────────────────────────────────────────────────────────────────────────
 // Sterling Glams Logistics — Firestore security rules
 //
-// ⚠️  REVIEW BEFORE DEPLOYING: these rules require server-side writes to use
-//     firebase-admin (which bypasses rules). Several routes in lib/firestore.ts
-//     currently use the client SDK without auth and will be denied by these
-//     rules until that migration is done. Until then, deploy these rules
-//     alongside switching:
-//       app/(app)/api/woocommerce/route.ts        → adminDb
-//       app/(app)/api/ratings/[tracking]/route.ts → adminDb
-//       app/(app)/api/driver/**                   → adminDb
-//       lib/firestore.ts mutation helpers         → adminDb
+// These rules require server-side access to use firebase-admin, which bypasses
+// rules. That migration is COMPLETE and was re-verified: every route under
+// app/(app)/api/** imports adminDb or lib/server/firestore-admin, and none
+// imports the client-SDK helpers in lib/firestore.ts.
+//
+// The client SDK is still used, but only from admin dashboard pages (orders,
+// drivers, dispatch, dashboard, reports, reviews, routes) where the user is
+// signed in with the `admin` claim, so isAdmin() is satisfied. Drivers
+// authenticate with a custom session rather than Firebase Auth and therefore
+// have request.auth == null — they must never read Firestore directly from the
+// client; their data comes from /api/driver/** instead. OrderAlertProvider
+// wraps the whole (app) group but guards its subscription on a signed-in
+// Firebase user, so it stays inert on driver and public tracking pages.
 //
 // Deploy with:   firebase deploy --only firestore:rules
 // ─────────────────────────────────────────────────────────────────────────────
