@@ -44,9 +44,10 @@ export async function removeDuplicateOrders() {
   return deleted
 }
 
-// Utility: Backfill lat/lng for orders missing coordinates
+// Utility: Backfill lat/lng (and distanceKm) for orders missing coordinates
 export async function backfillOrderCoords() {
   const snapshot = await getDocs(ordersCollection)
+  const hub = getHubCoordinates()
   let updated = 0
   for (const docSnap of snapshot.docs) {
     const data = docSnap.data()
@@ -55,7 +56,12 @@ export async function backfillOrderCoords() {
     if (!address?.trim()) continue
     const coords = await geocodeAddress(address.trim())
     if (coords) {
-      await updateDoc(docSnap.ref, { lat: coords.lat, lng: coords.lng })
+      // Write distanceKm alongside so the two can never drift apart.
+      await updateDoc(docSnap.ref, {
+        lat: coords.lat,
+        lng: coords.lng,
+        distanceKm: haversineDistanceKm(hub, coords),
+      })
       updated++
     }
   }
@@ -80,85 +86,10 @@ import {
   type QueryDocumentSnapshot,
 } from "firebase/firestore"
 import { db } from "./firebase"
+import { geocodeAddress, haversineDistanceKm, getHubCoordinates } from "./geocode"
 import type { Order, Driver, NotificationLog } from "./data"
 import { hashPassword, verifyPassword, isHashed } from "./password"
 import { ORDER_STATUS, DRIVER_STATUS } from "./constants"
-
-type LatLng = { lat: number; lng: number }
-
-const DEFAULT_HUB_COORDS: LatLng = { lat: 6.4642667, lng: 3.5554814 }
-
-function getHubCoordinates(): LatLng {
-  const rawLat = Number(process.env.NEXT_PUBLIC_HUB_LAT)
-  const rawLng = Number(process.env.NEXT_PUBLIC_HUB_LNG)
-  if (!Number.isNaN(rawLat) && !Number.isNaN(rawLng)) {
-    return { lat: rawLat, lng: rawLng }
-  }
-  return DEFAULT_HUB_COORDS
-}
-
-const geocodeCache = new Map<string, LatLng>()
-
-async function geocodeAddress(address: string): Promise<LatLng | null> {
-  const query = address.trim()
-  if (!query) return null
-
-  const cached = geocodeCache.get(query)
-  if (cached) return cached
-
-  // Try Google Maps Geocoding API first
-  try {
-    const API_KEY = process.env.NEXT_PUBLIC_GOOGLE_MAPS_KEY ?? ""
-    const url = `https://maps.googleapis.com/maps/api/geocode/json?address=${encodeURIComponent(query)}&key=${API_KEY}`
-    const response = await fetch(url)
-    if (response.ok) {
-      const data = await response.json()
-      const loc = data.results?.[0]?.geometry?.location
-      if (loc) {
-        const coords: LatLng = { lat: loc.lat, lng: loc.lng }
-        geocodeCache.set(query, coords)
-        return coords
-      }
-    }
-  } catch { /* fall through to Nominatim */ }
-
-  // Fallback to Nominatim (OpenStreetMap)
-  try {
-    const nUrl = `https://nominatim.openstreetmap.org/search?format=jsonv2&limit=1&q=${encodeURIComponent(query)}`
-    const nRes = await fetch(nUrl, {
-      headers: { Accept: "application/json", "User-Agent": "sg-delivery/1.0" },
-    })
-    if (!nRes.ok) return null
-    const nData = await nRes.json()
-    const result = nData?.[0]
-    if (!result) return null
-
-    const lat = Number(result.lat)
-    const lng = Number(result.lon)
-    if (Number.isNaN(lat) || Number.isNaN(lng)) return null
-
-    const coords: LatLng = { lat, lng }
-    geocodeCache.set(query, coords)
-    return coords
-  } catch {
-    return null
-  }
-}
-
-function haversineDistanceKm(a: LatLng, b: LatLng): number {
-  const toRad = (value: number) => (value * Math.PI) / 180
-  const earthRadiusKm = 6371
-  const dLat = toRad(b.lat - a.lat)
-  const dLng = toRad(b.lng - a.lng)
-  const lat1 = toRad(a.lat)
-  const lat2 = toRad(b.lat)
-
-  const h =
-    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
-    Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLng / 2) * Math.sin(dLng / 2)
-  const c = 2 * Math.atan2(Math.sqrt(h), Math.sqrt(1 - h))
-  return Number((earthRadiusKm * c).toFixed(2))
-}
 
 async function calculateDistanceKm(address: string): Promise<{ distanceKm?: number; lat?: number; lng?: number }> {
   const destination = await geocodeAddress(address)

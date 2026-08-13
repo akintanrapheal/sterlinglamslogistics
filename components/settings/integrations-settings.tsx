@@ -4,9 +4,10 @@ import { useEffect, useState } from "react"
 import { Label } from "@/components/ui/label"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
-import { Save, Loader2, Copy, Check, Eye, EyeOff, RefreshCw } from "lucide-react"
+import { Save, Loader2, Copy, Check, Eye, EyeOff, RefreshCw, MapPin, AlertTriangle } from "lucide-react"
 import { doc, getDoc, setDoc } from "firebase/firestore"
-import { db } from "@/lib/firebase"
+import { db, auth } from "@/lib/firebase"
+import { resetGoogleMapsLoader } from "@/lib/google-maps"
 import { toast } from "@/hooks/use-toast"
 
 interface IntegrationSettings {
@@ -15,6 +16,7 @@ interface IntegrationSettings {
   paystackPublicKey: string
   paystackSecretKey: string
   apiKey: string
+  googleMapsKey: string
 }
 
 const DEFAULT: IntegrationSettings = {
@@ -23,7 +25,10 @@ const DEFAULT: IntegrationSettings = {
   paystackPublicKey: "",
   paystackSecretKey: "",
   apiKey: "",
+  googleMapsKey: "",
 }
+
+type MapsTestResult = { ok: boolean; status: string; message: string }
 
 const SETTINGS_DOC = "integrationSettings"
 
@@ -62,6 +67,8 @@ export function IntegrationsSettingsPanel() {
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [copiedField, setCopiedField] = useState<string | null>(null)
+  const [testingMaps, setTestingMaps] = useState(false)
+  const [mapsTest, setMapsTest] = useState<MapsTestResult | null>(null)
 
   useEffect(() => {
     async function load() {
@@ -83,12 +90,47 @@ export function IntegrationsSettingsPanel() {
     setSaving(true)
     try {
       await setDoc(doc(db, "settings", SETTINGS_DOC), settings)
-      toast({ title: "Saved", description: "Integration settings updated." })
+      // Force the next map load to pick up a changed key.
+      resetGoogleMapsLoader()
+      toast({
+        title: "Saved",
+        description:
+          "Integration settings updated. Reload any open map pages for a new Google Maps key to take effect.",
+      })
     } catch (err) {
       console.error("Failed to save integration settings:", err)
       toast({ title: "Error", description: "Failed to save settings.", variant: "destructive" })
     } finally {
       setSaving(false)
+    }
+  }
+
+  /** Asks the server to call Google with this key and report the real status,
+   *  so a broken key is diagnosed here instead of as a grey map. */
+  async function testMapsKey() {
+    setTestingMaps(true)
+    setMapsTest(null)
+    try {
+      const token = await auth?.currentUser?.getIdToken()
+      const res = await fetch("/api/admin/test-maps-key", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        body: JSON.stringify({ key: settings.googleMapsKey.trim() }),
+      })
+      const data = (await res.json()) as MapsTestResult
+      setMapsTest(data)
+    } catch (err) {
+      console.error("Maps key test failed:", err)
+      setMapsTest({
+        ok: false,
+        status: "NETWORK_ERROR",
+        message: "Could not reach the server to run the test.",
+      })
+    } finally {
+      setTestingMaps(false)
     }
   }
 
@@ -122,9 +164,82 @@ export function IntegrationsSettingsPanel() {
       <div>
         <h2 className="text-xl font-semibold">Integrations</h2>
         <p className="text-sm text-muted-foreground">
-          Connect external services — WooCommerce, Paystack, and your public API key
+          Connect external services — Google Maps, WooCommerce, Paystack, and your public API key
         </p>
       </div>
+
+      {/* Google Maps */}
+      <section className="space-y-4">
+        <div>
+          <h3 className="flex items-center gap-2 text-base font-semibold">
+            <MapPin className="size-4" />
+            Google Maps
+          </h3>
+          <p className="text-sm text-muted-foreground">
+            Powers the dispatch map, driver map, route optimisation, and address geocoding.
+            Saving a key here overrides the deployed environment variable — no redeploy needed.
+          </p>
+        </div>
+
+        <div className="space-y-2">
+          <Label htmlFor="google-maps-key">API key</Label>
+          <div className="flex gap-2">
+            <div className="flex-1">
+              <MaskedInput
+                id="google-maps-key"
+                value={settings.googleMapsKey}
+                onChange={(v) => {
+                  update("googleMapsKey", v)
+                  setMapsTest(null)
+                }}
+                placeholder="AIzaSy... (leave blank to use the deployed env key)"
+              />
+            </div>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={testMapsKey}
+              disabled={testingMaps}
+              className="shrink-0"
+            >
+              {testingMaps ? <Loader2 className="mr-1.5 size-4 animate-spin" /> : null}
+              {testingMaps ? "Testing..." : "Test key"}
+            </Button>
+          </div>
+
+          {mapsTest && (
+            <div
+              role="status"
+              className={`flex gap-2 rounded-md border p-3 text-xs ${
+                mapsTest.ok
+                  ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-700 dark:text-emerald-400"
+                  : "border-red-500/40 bg-red-500/10 text-red-700 dark:text-red-400"
+              }`}
+            >
+              {mapsTest.ok ? (
+                <Check className="mt-0.5 size-4 shrink-0" />
+              ) : (
+                <AlertTriangle className="mt-0.5 size-4 shrink-0" />
+              )}
+              <div className="space-y-1">
+                <p className="font-semibold">
+                  {mapsTest.ok ? "Key is working" : `Failed — ${mapsTest.status}`}
+                </p>
+                <p className="opacity-90">{mapsTest.message}</p>
+              </div>
+            </div>
+          )}
+
+          <p className="text-xs text-muted-foreground">
+            Test the key before saving. Restrict it to an HTTP referrer
+            (<code className="font-mono">sterlinglamslogistics.com/*</code>) in Google Cloud —
+            this key is visible to anyone who loads a map, so an unrestricted key can be
+            used by others at your expense.
+          </p>
+        </div>
+      </section>
+
+      <hr className="border-border" />
 
       {/* API key */}
       <section className="space-y-4">

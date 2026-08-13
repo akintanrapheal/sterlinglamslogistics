@@ -214,9 +214,14 @@ export default function OrdersPage() {
       return Number((6371 * 2 * Math.atan2(Math.sqrt(h), Math.sqrt(1 - h))).toFixed(2))
     }
 
-    const missing = orderList.filter(
-      (o) => (typeof o.distanceKm !== "number" || Number.isNaN(o.distanceKm)) && o.address?.trim()
-    )
+    // An order needs backfilling if it is missing its distance *or* its
+    // coordinates — the latter is what keeps it off the map.
+    const missing = orderList.filter((o) => {
+      if (!o.address?.trim()) return false
+      const needsDistance = typeof o.distanceKm !== "number" || Number.isNaN(o.distanceKm)
+      const needsCoords = typeof o.lat !== "number" || typeof o.lng !== "number"
+      return needsDistance || needsCoords
+    })
     if (missing.length === 0) return
 
     let cancelled = false
@@ -244,13 +249,16 @@ export default function OrdersPage() {
             if (!result) continue
 
             const loc = result[0].geometry.location
-            const distanceKm = haversineKm(HUB, { lat: loc.lat(), lng: loc.lng() })
+            const coords = { lat: loc.lat(), lng: loc.lng() }
+            const distanceKm = haversineKm(HUB, coords)
 
             if (!cancelled) {
               setOrderList((prev) =>
-                prev.map((o) => (o.id === order.id ? { ...o, distanceKm } : o))
+                prev.map((o) => (o.id === order.id ? { ...o, ...coords, distanceKm } : o))
               )
-              updateOrder(order.id, { distanceKm } as Partial<Order>).catch(() => {})
+              // Persist coordinates too — an order without lat/lng cannot be
+              // plotted on the dispatch or driver map.
+              updateOrder(order.id, { ...coords, distanceKm } as Partial<Order>).catch(() => {})
             }
           } catch {
             // skip this order

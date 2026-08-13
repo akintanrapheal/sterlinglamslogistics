@@ -47,6 +47,26 @@ function haversineDistanceKm(a, b) {
 
 const geocodeCache = new Map()
 
+// Mirrors lib/geocode.ts — a Google config failure (billing off, restricted key,
+// quota) returns HTTP 200 with status REQUEST_DENIED and an empty results array,
+// so it must be distinguished from a genuine "address not found".
+const geocodeHealth = { lastError: null, errorCount: 0 }
+
+function recordHardFailure(status, message) {
+  const first = geocodeHealth.errorCount === 0
+  geocodeHealth.errorCount++
+  geocodeHealth.lastError = { status, message }
+  if (first) {
+    console.error(
+      `\n[geocode] Google Geocoding API rejected the request: ${status}` +
+        (message ? ` — ${message}` : "") +
+        `\n          Falling back to OpenStreetMap, which resolves few Nigerian ` +
+        `street addresses.\n          Check billing and API-key restrictions on the ` +
+        `Google Cloud project.\n`
+    )
+  }
+}
+
 async function geocodeAddress(address) {
   const query = String(address || "").trim()
   if (!query) return null
@@ -56,20 +76,31 @@ async function geocodeAddress(address) {
 
   // Try Google Maps Geocoding API first
   const API_KEY = process.env.NEXT_PUBLIC_GOOGLE_MAPS_KEY || ""
-  if (API_KEY) {
+  if (!API_KEY) {
+    recordHardFailure("NO_API_KEY", "NEXT_PUBLIC_GOOGLE_MAPS_KEY is not set")
+  } else {
     try {
-      const gUrl = `https://maps.googleapis.com/maps/api/geocode/json?address=${encodeURIComponent(query)}&key=${API_KEY}`
+      const gUrl = `https://maps.googleapis.com/maps/api/geocode/json?address=${encodeURIComponent(query)}&key=${API_KEY}&region=ng`
       const gRes = await fetch(gUrl)
-      if (gRes.ok) {
+      if (!gRes.ok) {
+        recordHardFailure(`HTTP_${gRes.status}`, gRes.statusText)
+      } else {
         const gData = await gRes.json()
-        const loc = gData.results?.[0]?.geometry?.location
-        if (loc) {
-          const coords = { lat: loc.lat, lng: loc.lng }
-          geocodeCache.set(query, coords)
-          return coords
+        const status = gData.status || "UNKNOWN"
+        if (status === "OK") {
+          const loc = gData.results?.[0]?.geometry?.location
+          if (loc) {
+            const coords = { lat: loc.lat, lng: loc.lng }
+            geocodeCache.set(query, coords)
+            return coords
+          }
+        } else if (status !== "ZERO_RESULTS") {
+          recordHardFailure(status, gData.error_message || "")
         }
       }
-    } catch { /* fall through to Nominatim */ }
+    } catch (err) {
+      recordHardFailure("NETWORK_ERROR", err?.message ?? String(err))
+    }
   }
 
   // Fallback to Nominatim (OpenStreetMap)
@@ -119,6 +150,7 @@ async function run() {
 
   let updated = 0
   let skipped = 0
+  let unresolved = 0
 
   for (const orderDoc of snapshot.docs) {
     const data = orderDoc.data()
@@ -129,24 +161,50 @@ async function run() {
       continue
     }
 
-    const coords = await geocodeAddress(address)
-    if (!coords) {
+    const hasCoords = typeof data.lat === "number" && typeof data.lng === "number"
+    const hasDistance = typeof data.distanceKm === "number" && !Number.isNaN(data.distanceKm)
+    if (hasCoords && hasDistance) {
       skipped += 1
+      continue
+    }
+
+    // Reuse stored coordinates when only distanceKm is missing — no API call needed.
+    const coords = hasCoords
+      ? { lat: data.lat, lng: data.lng }
+      : await geocodeAddress(address)
+
+    if (!coords) {
+      unresolved += 1
       continue
     }
 
     const distanceKm = haversineDistanceKm(hub, coords)
     const ref = doc(db, "orders", orderDoc.id)
+    // Write lat/lng as well as distanceKm — without coordinates the order can
+    // never be plotted on the dispatch or driver map.
     await updateDoc(ref, {
+      lat: coords.lat,
+      lng: coords.lng,
       distanceKm,
       updatedAt: new Date(),
     })
 
     updated += 1
-    console.log(`Updated ${orderDoc.id} -> ${distanceKm} km`)
+    console.log(`Updated ${orderDoc.id} -> ${coords.lat},${coords.lng} (${distanceKm} km)`)
   }
 
-  console.log(`\nDone. Updated: ${updated}, Skipped: ${skipped}`)
+  console.log(
+    `\nDone. Updated: ${updated}, Skipped (already complete / no address): ${skipped}, Could not geocode: ${unresolved}`
+  )
+
+  if (geocodeHealth.lastError) {
+    console.error(
+      `\n⚠  Google geocoding failed ${geocodeHealth.errorCount}x ` +
+        `(${geocodeHealth.lastError.status}). Fix that and re-run — the ` +
+        `${unresolved} unresolved order(s) will not appear on the map until you do.`
+    )
+    process.exitCode = 1
+  }
 }
 
 run().catch((err) => {
