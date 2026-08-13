@@ -59,12 +59,33 @@ service cloud.firestore {
       allow create, update, delete: if isAdmin();
     }
 
-    // ── Settings (business info, notification toggles, driver flags) ──────────
-    // Public read so the customer-facing pages can pick up business info,
-    // logo, etc. Writes admin-only.
-    match /settings/{document=**} {
+    // ── Settings ──────────────────────────────────────────────────────────────
+    // ⚠️ These rules previously used a blanket `match /settings/{document=**}`
+    // with `allow read: if true`. That exposed settings/integrationSettings —
+    // which holds API keys and webhook secrets — to anyone with the project ID,
+    // and the project ID ships in the public client bundle. Any secret that was
+    // stored there before this change must be treated as compromised and
+    // rotated.
+    //
+    // Branding is the only genuinely public part: customer-facing pages may need
+    // the business name and logo with no authenticated session. Note that
+    // Firestore grants access if ANY matching rule allows it, so the specific
+    // public rules below widen read access only for those two documents.
+    match /settings/businessSettings {
       allow read: if true;
       allow write: if isAdmin();
+    }
+
+    match /settings/brandSettings {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    // Everything else — integrations, dispatch, routing, driver flags,
+    // notification config — is admin-only in both directions. Server routes use
+    // the admin SDK, which bypasses these rules, so they are unaffected.
+    match /settings/{document} {
+      allow read, write: if isAdmin();
     }
 
     // ── Notification logs ─────────────────────────────────────────────────────

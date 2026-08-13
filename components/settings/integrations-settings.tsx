@@ -10,22 +10,37 @@ import { db, auth } from "@/lib/firebase"
 import { resetGoogleMapsLoader } from "@/lib/google-maps"
 import { toast } from "@/hooks/use-toast"
 
+/**
+ * Only non-secret configuration belongs here. Webhook and payment *secrets* are
+ * read from environment variables by the server routes that use them — they were
+ * previously stored in this Firestore document, which no code ever read back and
+ * which was world-readable, so they have been removed entirely.
+ */
 interface IntegrationSettings {
   woocommerceWebhookUrl: string
-  woocommerceSecret: string
   paystackPublicKey: string
-  paystackSecretKey: string
   apiKey: string
   googleMapsKey: string
 }
 
 const DEFAULT: IntegrationSettings = {
   woocommerceWebhookUrl: "",
-  woocommerceSecret: "",
   paystackPublicKey: "",
-  paystackSecretKey: "",
   apiKey: "",
   googleMapsKey: "",
+}
+
+/** Picks only known fields off the stored document. Anything else — including
+ *  the legacy `woocommerceSecret` / `paystackSecretKey` values — is dropped, so
+ *  the next save strips them from Firestore. */
+function fromStored(data: Record<string, unknown>): IntegrationSettings {
+  const str = (v: unknown) => (typeof v === "string" ? v : "")
+  return {
+    woocommerceWebhookUrl: str(data.woocommerceWebhookUrl),
+    paystackPublicKey: str(data.paystackPublicKey),
+    apiKey: str(data.apiKey),
+    googleMapsKey: str(data.googleMapsKey),
+  }
 }
 
 type MapsTestResult = { ok: boolean; status: string; message: string }
@@ -75,7 +90,7 @@ export function IntegrationsSettingsPanel() {
       try {
         const snap = await getDoc(doc(db, "settings", SETTINGS_DOC))
         if (snap.exists()) {
-          setSettings({ ...DEFAULT, ...snap.data() } as IntegrationSettings)
+          setSettings(fromStored(snap.data() as Record<string, unknown>))
         }
       } catch (err) {
         console.error("Failed to load integration settings:", err)
@@ -246,7 +261,7 @@ export function IntegrationsSettingsPanel() {
         <div>
           <h3 className="text-base font-semibold">API key</h3>
           <p className="text-sm text-muted-foreground">
-            Your platform API key for authenticating external requests and webhooks
+            A generated token for future external API access
           </p>
         </div>
 
@@ -277,7 +292,11 @@ export function IntegrationsSettingsPanel() {
             </Button>
           </div>
           {settings.apiKey && (
-            <p className="text-xs text-amber-600">Keep this key secret. Regenerating will invalidate the old key.</p>
+            <p className="text-xs text-amber-600">
+              Not yet enforced — no API route currently validates this key, so generating
+              or regenerating it grants and revokes nothing. Treat it as a placeholder
+              until request authentication is wired up.
+            </p>
           )}
         </div>
       </section>
@@ -313,14 +332,15 @@ export function IntegrationsSettingsPanel() {
         </div>
 
         <div className="space-y-2">
-          <Label htmlFor="wc-secret">Webhook secret</Label>
-          <MaskedInput
-            id="wc-secret"
-            value={settings.woocommerceSecret}
-            onChange={(v) => update("woocommerceSecret", v)}
-            placeholder="wc_secret_..."
-          />
-          <p className="text-xs text-muted-foreground">Must match the secret set in WooCommerce → Webhooks → Secret</p>
+          <Label>Webhook secret</Label>
+          <div className="rounded-md border border-border bg-secondary/40 p-3 text-xs text-muted-foreground">
+            Set as the{" "}
+            <code className="font-mono text-foreground">WOOCOMMERCE_WEBHOOK_SECRET</code>{" "}
+            environment variable, not here — it must match WooCommerce → Webhooks → Secret.
+            Secrets are kept out of Firestore because this settings document is
+            readable by every signed-in admin and is not an appropriate store for
+            credentials.
+          </div>
         </div>
 
         <div className="space-y-2">
@@ -357,16 +377,11 @@ export function IntegrationsSettingsPanel() {
         </div>
 
         <div className="space-y-2">
-          <Label htmlFor="paystack-secret">Secret key</Label>
-          <MaskedInput
-            id="paystack-secret"
-            value={settings.paystackSecretKey}
-            onChange={(v) => update("paystackSecretKey", v)}
-            placeholder="sk_live_..."
-          />
-          <p className="text-xs text-muted-foreground">
-            Secret key is stored in Firestore — do not share. Prefer storing in Vercel environment variables instead for production.
-          </p>
+          <Label>Secret key</Label>
+          <div className="rounded-md border border-border bg-secondary/40 p-3 text-xs text-muted-foreground">
+            Set as a <code className="font-mono text-foreground">PAYSTACK_SECRET_KEY</code>{" "}
+            environment variable, not here. Only the public key belongs in this form.
+          </div>
         </div>
       </section>
 
