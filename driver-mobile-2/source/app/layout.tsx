@@ -7,7 +7,7 @@ import "./globals.css"
  *
  * This is the canonical root layout — it must provide <html> and <body>
  * because Next.js's App Router requires them at the root. build.ps1
- * SKIPS copying the main project's app/(app)/driver/layout.tsx over this
+ * SKIPS copying the main project's app/(app)/layout.tsx over this
  * file (see the SkipNames list in step 2) so the wrap-in-DriverShell
  * behaviour is preserved without losing the html/body scaffolding.
  *
