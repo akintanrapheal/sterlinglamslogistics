@@ -5,6 +5,7 @@ import { DriverTabs } from "@/components/driver-tabs"
 import { DriverProvider } from "@/components/driver-context"
 import { DriverDrawer } from "@/components/driver-drawer"
 import { DriverNativeChrome } from "@/components/driver-native-chrome"
+import { DriverStatusBanner } from "@/components/driver-status-banner"
 
 export function DriverShell({ children }: { children: React.ReactNode }) {
   return (
@@ -16,6 +17,7 @@ export function DriverShell({ children }: { children: React.ReactNode }) {
       >
         <DriverDrawer />
         <DriverTabs />
+        <DriverStatusBanner />
         {children}
         <Toaster />
       </div>

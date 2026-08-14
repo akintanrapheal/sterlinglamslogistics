@@ -12,6 +12,16 @@ export interface PendingDelivery {
   signatureData: string | null
   deliveryNotes: string
   capturedAt: number
+  /**
+   * Proof-of-delivery fields the online submit path has always sent but the
+   * queue used to drop, so a delivery confirmed in a dead zone lost who
+   * signed for it and where it happened — exactly the evidence a disputed
+   * delivery turns on. Optional because entries queued by an older build
+   * won't have them.
+   */
+  signerName?: string | null
+  deliveryLat?: number | null
+  deliveryLng?: number | null
 }
 
 export function queueDelivery(item: PendingDelivery): void {
