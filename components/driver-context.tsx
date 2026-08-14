@@ -38,7 +38,21 @@ interface DriverContextValue {
   gpsError: boolean
   /** Number of deliveries saved offline waiting to sync */
   pendingDeliveryCount: number
+  /**
+   * Whether the API is actually reachable — set from real request outcomes,
+   * not navigator.onLine, which stays true in the dead zones and captive
+   * portals drivers hit most.
+   */
+  isConnected: boolean
+  /** True while the offline queues are being flushed. */
+  syncing: boolean
+  /** Force a flush of the offline queues (the banner's "Retry now"). */
+  syncPending: () => Promise<void>
 }
+
+// Backoff bounds for flushing the offline write queues.
+const RETRY_BASE_MS = 20_000
+const RETRY_MAX_MS = 5 * 60_000
 
 const DriverContext = createContext<DriverContextValue | null>(null)
 
@@ -61,9 +75,17 @@ export function DriverProvider({ children }: { children: ReactNode }) {
   const [liveGps, setLiveGps] = useState<{ lat: number; lng: number } | null>(null)
   const [gpsError, setGpsError] = useState(false)
   const [pendingDeliveryCount, setPendingDeliveryCount] = useState(0)
+  // Reachability of the *API*, not just the radio. navigator.onLine only
+  // reports whether a link exists, which is why it stays true through the
+  // failures drivers actually hit (edge errors, captive portals, dead zones
+  // that still associate). Seeded optimistically so the banner doesn't flash
+  // on a cold start before the first request resolves.
+  const [isConnected, setIsConnected] = useState(true)
+  const [syncing, setSyncing] = useState(false)
   const watchIdRef = useRef<number | null>(null)
   const lastGpsWriteRef = useRef<number>(0)
   const isRetryingRef = useRef(false)
+  const retryPendingRef = useRef<(() => Promise<void>) | null>(null)
 
   // Load session from localStorage
   useEffect(() => {
@@ -188,6 +210,11 @@ export function DriverProvider({ children }: { children: ReactNode }) {
     async function retryPending() {
       if (isRetryingRef.current) return
       isRetryingRef.current = true
+      // Any fetch that throws is a transport failure — that, not
+      // navigator.onLine, is what drives the "no connection" banner.
+      let transportFailed = false
+      const hadWork = getPendingCount() + pendingStatusCount() > 0
+      if (hadWork) setSyncing(true)
       try {
         // 1) POD submissions
         const pending = getPendingDeliveries()
@@ -207,8 +234,20 @@ export function DriverProvider({ children }: { children: ReactNode }) {
             if (res.ok) {
               removePendingDelivery(item.orderId)
               toast({ title: "Delivery synced", description: `${item.orderNumber} confirmed while offline.` })
+            } else if (res.status >= 400 && res.status < 500 && res.status !== 408 && res.status !== 429) {
+              // The server understood and refused. Retrying can't fix a
+              // malformed or already-applied submission, and silently looping
+              // on it would keep the pending badge up forever while newer
+              // items queue behind it. Drop it and tell the driver, so they
+              // can redo that one delivery rather than lose the whole queue.
+              removePendingDelivery(item.orderId)
+              toast({
+                title: "Delivery could not be synced",
+                description: `${item.orderNumber} was rejected by the server — please confirm it again.`,
+                variant: "destructive",
+              })
             }
-          } catch { /* retry next time */ }
+          } catch { transportFailed = true /* retry next time */ }
         }
         // 2) Status updates (Mark as Picked Up / On the way / revert)
         const pendingStatus = getPendingStatusUpdates()
@@ -226,19 +265,72 @@ export function DriverProvider({ children }: { children: ReactNode }) {
             if (res.ok) {
               removeStatusUpdate(item.orderId)
               toast({ title: "Synced", description: `${item.orderNumber} → ${item.status}` })
+            } else if (res.status >= 400 && res.status < 500 && res.status !== 408 && res.status !== 429) {
+              // Same reasoning as the POD queue above: a 4xx won't heal.
+              removeStatusUpdate(item.orderId)
+              toast({
+                title: "Status update rejected",
+                description: `${item.orderNumber} could not be set to ${item.status}.`,
+                variant: "destructive",
+              })
             }
-          } catch { /* retry next time */ }
+          } catch { transportFailed = true /* retry next time */ }
         }
         updateCount()
+        // Only a request that actually completed tells us anything about
+        // reachability; if there was nothing queued, leave the flag alone.
+        if (hadWork) setIsConnected(!transportFailed)
       } finally {
         isRetryingRef.current = false
+        setSyncing(false)
       }
     }
 
-    window.addEventListener("online", retryPending)
+    // Expose a manual trigger so the connection banner's "Retry now" button
+    // and the pull-to-refresh path can force a flush.
+    retryPendingRef.current = retryPending
+
+    function markOffline() { setIsConnected(false) }
+    async function onOnline() {
+      setIsConnected(true)
+      await retryPending()
+    }
+
+    window.addEventListener("online", onOnline)
+    window.addEventListener("offline", markOffline)
+
+    // The `online` event alone is not enough. It fires on *link* changes, not
+    // on server reachability — so if the device keeps its connection but the
+    // API is failing (edge 403s, DNS, a deploy), queued writes would sit
+    // forever waiting for an event that never comes. Poll while work is
+    // outstanding, backing off so a long outage doesn't hammer the radio and
+    // drain the battery.
+    let timer: number | null = null
+    let delay = RETRY_BASE_MS
+    function schedule() {
+      if (timer !== null) window.clearTimeout(timer)
+      timer = window.setTimeout(async () => {
+        if (getPendingCount() + pendingStatusCount() > 0) {
+          const before = getPendingCount() + pendingStatusCount()
+          await retryPending()
+          const after = getPendingCount() + pendingStatusCount()
+          // Progress resets the backoff; a stalled queue widens the gap.
+          delay = after < before ? RETRY_BASE_MS : Math.min(delay * 2, RETRY_MAX_MS)
+        } else {
+          delay = RETRY_BASE_MS
+        }
+        schedule()
+      }, delay)
+    }
+    schedule()
+
     // Also retry immediately if the device is already online when the component mounts
     if (navigator.onLine) void retryPending()
-    return () => window.removeEventListener("online", retryPending)
+    return () => {
+      window.removeEventListener("online", onOnline)
+      window.removeEventListener("offline", markOffline)
+      if (timer !== null) window.clearTimeout(timer)
+    }
   }, [])
 
   const refreshOrders = useCallback(async () => {
@@ -431,8 +523,11 @@ export function DriverProvider({ children }: { children: ReactNode }) {
     liveGps,
     gpsError,
     pendingDeliveryCount,
+    isConnected,
+    syncing,
+    syncPending: async () => { await retryPendingRef.current?.() },
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }), [session, driver, orders, isOnline, justWentOnline, loadingSession, loadingOrders, drawerOpen, refreshOrders, optimizeRoute, liveGps, gpsError, pendingDeliveryCount])
+  }), [session, driver, orders, isOnline, justWentOnline, loadingSession, loadingOrders, drawerOpen, refreshOrders, optimizeRoute, liveGps, gpsError, pendingDeliveryCount, isConnected, syncing])
 
   return (
     <DriverContext.Provider value={contextValue}>

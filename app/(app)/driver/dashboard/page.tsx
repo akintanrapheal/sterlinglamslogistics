@@ -68,8 +68,6 @@ export default function DriverDashboard() {
     goOnline,
     refreshOrders,
     optimizeRoute,
-    gpsError,
-    pendingDeliveryCount,
   } = useDriver()
   const [showOnlineToast, setShowOnlineToast] = useState(false)
   const [routeModalOpen, setRouteModalOpen] = useState(false)
@@ -355,19 +353,9 @@ export default function DriverDashboard() {
         </div>
       </div>
 
-      {/* Pending offline deliveries banner */}
-      {pendingDeliveryCount > 0 && (
-        <div className="mb-3 rounded-xl bg-amber-500 px-4 py-2.5 text-center text-sm font-medium text-white shadow-lg">
-          {pendingDeliveryCount} delivery{pendingDeliveryCount > 1 ? " confirmations" : " confirmation"} pending sync — reconnect to send
-        </div>
-      )}
-
-      {/* GPS error banner */}
-      {gpsError && (
-        <div className="mb-3 rounded-xl bg-red-500 px-4 py-2.5 text-center text-sm font-medium text-white shadow-lg">
-          ⚠️ GPS unavailable — your location is not updating
-        </div>
-      )}
+      {/* Pending-sync and GPS warnings now live in DriverStatusBanner, rendered
+          by the shell so they follow the driver onto every screen instead of
+          only appearing here on the dashboard. */}
 
       {/* Online toast notification */}
       {showOnlineToast && (
