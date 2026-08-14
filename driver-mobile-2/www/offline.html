@@ -129,7 +129,9 @@
     // Try to bounce back to the live app whenever a connection looks up.
     // Three triggers: (1) the browser fires `online`, (2) the Retry button,
     // (3) a periodic background check (every 5s, lightweight HEAD probe).
-    var TARGET = "https://sterlinglamslogistics.com/driver";
+    // Vercel origin, not the apex — the apex is behind Cloudflare, which
+    // intermittently 403s this app. Keep in step with build.ps1 -ApiBase.
+    var TARGET = "https://sterlinglamslogistics.vercel.app/driver";
     var retryBtn = document.getElementById("retryBtn");
     var statusText = document.getElementById("statusText");
     var dot = document.getElementById("dot");
