@@ -1,8 +1,20 @@
 "use client"
 
-import { useEffect, useMemo, useRef, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { Spinner } from "@/components/ui/spinner"
-import { Search, Wifi, WifiOff } from "lucide-react"
+import {
+  Search,
+  Wifi,
+  WifiOff,
+  Copy,
+  Maximize2,
+  Minimize2,
+  Layers,
+  LocateFixed,
+  ChevronUp,
+  ChevronDown,
+  Check,
+} from "lucide-react"
 import { subscribeDriversRealtime, subscribeOrdersRealtime } from "@/lib/firestore"
 import { loadGoogleMaps } from "@/lib/google-maps"
 import { useAuth } from "@/components/auth-provider"
@@ -25,6 +37,12 @@ export default function RoutesPage() {
   const [isLoading, setIsLoading] = useState(true)
   const [selectedOrderId, setSelectedOrderId] = useState<string | null>(null)
   const [searchTerm, setSearchTerm] = useState("")
+  const [mobileView, setMobileView] = useState<"map" | "list">("map")
+  const [statusFilter, setStatusFilter] = useState<string>("all")
+  const [focusedDriverId, setFocusedDriverId] = useState<string | null>(null)
+  const [mapType, setMapType] = useState<"roadmap" | "satellite">("roadmap")
+  const [isFullscreen, setIsFullscreen] = useState(false)
+  const [copiedId, setCopiedId] = useState<string | null>(null)
 
   const firstOrdersLoadedRef = useRef(false)
   const firstDriversLoadedRef = useRef(false)
@@ -77,14 +95,26 @@ export default function RoutesPage() {
 
   const filteredOrders = useMemo(() => {
     const q = searchTerm.trim().toLowerCase()
-    if (!q) return visibleOrders
-    return visibleOrders.filter(
+    let result = visibleOrders
+
+    // Status filter chip
+    if (statusFilter === "unassigned") result = result.filter((o) => !o.assignedDriver)
+    else if (statusFilter === "assigned") result = result.filter((o) => Boolean(o.assignedDriver) && o.status === "started")
+    else if (statusFilter === "in-transit") result = result.filter((o) => o.status === "in-transit")
+    else if (statusFilter === "picked-up") result = result.filter((o) => o.status === "picked-up")
+
+    // Focused driver filter
+    if (focusedDriverId) result = result.filter((o) => o.assignedDriver === focusedDriverId)
+
+    // Text search
+    if (q) result = result.filter(
       (o) =>
         o.orderNumber.toLowerCase().includes(q) ||
         o.customerName.toLowerCase().includes(q) ||
         o.address.toLowerCase().includes(q)
     )
-  }, [searchTerm, visibleOrders])
+    return result
+  }, [searchTerm, visibleOrders, statusFilter, focusedDriverId])
 
   const unassignedOrders = useMemo(() => filteredOrders.filter((o) => !o.assignedDriver), [filteredOrders])
   const assignedOrders = useMemo(() => filteredOrders.filter((o) => Boolean(o.assignedDriver)), [filteredOrders])
@@ -637,6 +667,55 @@ export default function RoutesPage() {
     map.setZoom(14)
   }
 
+  const fitAllBounds = useCallback(() => {
+    const map = mapRef.current
+    if (!map) return
+    const bounds = new google.maps.LatLngBounds()
+    let count = 0
+    visibleOrders.forEach((o) => { const c = orderCoords[o.id]; if (c) { bounds.extend(c); count++ } })
+    activeDrivers.forEach((d) => { if (d.lastLocation) { bounds.extend({ lat: d.lastLocation.lat, lng: d.lastLocation.lng }); count++ } })
+    bounds.extend(HUB)
+    if (count > 0) map.fitBounds(bounds, 48)
+    else { map.setCenter(LAGOS_CENTER); map.setZoom(11) }
+  }, [visibleOrders, orderCoords, activeDrivers])
+
+  const zoomToDriver = useCallback((driver: Driver) => {
+    if (!driver.lastLocation) return
+    const map = mapRef.current
+    if (!map) return
+    map.panTo({ lat: driver.lastLocation.lat, lng: driver.lastLocation.lng })
+    map.setZoom(15)
+    setMobileView("map")
+  }, [])
+
+  const copyAddress = useCallback((orderId: string, address: string) => {
+    navigator.clipboard.writeText(address).catch(() => {})
+    setCopiedId(orderId)
+    setTimeout(() => setCopiedId((prev) => (prev === orderId ? null : prev)), 2000)
+  }, [])
+
+  // Keyboard navigation: ArrowUp/Down cycles through filtered orders
+  useEffect(() => {
+    const allOrders = [...filteredOrders]
+    const handler = (e: KeyboardEvent) => {
+      if (e.target instanceof HTMLInputElement) return
+      if (e.key !== "ArrowUp" && e.key !== "ArrowDown") return
+      e.preventDefault()
+      const idx = allOrders.findIndex((o) => o.id === selectedOrderId)
+      const next = e.key === "ArrowDown"
+        ? allOrders[Math.min(idx + 1, allOrders.length - 1)]
+        : allOrders[Math.max(idx - 1, 0)]
+      if (next) focusOrderOnMap(next)
+    }
+    window.addEventListener("keydown", handler)
+    return () => window.removeEventListener("keydown", handler)
+  }, [filteredOrders, selectedOrderId]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Toggle map type
+  useEffect(() => {
+    mapRef.current?.setMapTypeId(mapType)
+  }, [mapType])
+
   if (isLoading) {
     return (
       <div className="flex h-screen items-center justify-center">
@@ -646,15 +725,78 @@ export default function RoutesPage() {
   }
 
   return (
-    <div className="grid h-[calc(100vh-3.5rem)] gap-0 overflow-hidden xl:grid-cols-[360px_minmax(0,1fr)]">
-      <aside className="flex h-full min-h-0 flex-col border-r bg-card">
+    <div className="flex h-[calc(100vh-3.5rem)] flex-col overflow-hidden">
+      {/* Mobile: Map / Orders tab toggle */}
+      <div className="flex shrink-0 border-b xl:hidden">
+        <button
+          type="button"
+          onClick={() => {
+            setMobileView("map")
+            setTimeout(() => {
+              if (mapRef.current) google.maps.event.trigger(mapRef.current, "resize")
+            }, 50)
+          }}
+          className={`flex-1 py-2.5 text-sm font-medium transition-colors ${mobileView === "map" ? "border-b-2 border-primary text-primary" : "text-muted-foreground"}`}
+        >
+          Map
+        </button>
+        <button
+          type="button"
+          onClick={() => setMobileView("list")}
+          className={`flex-1 py-2.5 text-sm font-medium transition-colors ${mobileView === "list" ? "border-b-2 border-primary text-primary" : "text-muted-foreground"}`}
+        >
+          Orders ({filteredOrders.length})
+        </button>
+      </div>
+
+      <div className={`flex min-h-0 flex-1 ${isFullscreen ? "" : "xl:grid xl:grid-cols-[360px_minmax(0,1fr)]"}`}>
+      <aside className={`min-h-0 flex-col border-r bg-card ${isFullscreen ? "hidden" : ""} ${mobileView === "list" ? "flex flex-1" : "hidden"} xl:flex xl:h-full`}>
+        {/* Sidebar header */}
         <div className="flex items-center justify-between border-b px-4 py-3">
-          <h1 className="text-lg font-semibold text-foreground">Orders ({filteredOrders.length})</h1>
-          <button type="button" className="text-xs text-muted-foreground hover:text-foreground" onClick={() => setSearchTerm("")}>
-            {searchTerm ? "Clear" : ""}
-          </button>
+          <h1 className="text-lg font-semibold text-foreground">Routes</h1>
+          {(searchTerm || statusFilter !== "all" || focusedDriverId) && (
+            <button type="button" className="text-xs text-muted-foreground hover:text-foreground" onClick={() => { setSearchTerm(""); setStatusFilter("all"); setFocusedDriverId(null) }}>
+              Clear filters
+            </button>
+          )}
         </div>
 
+        {/* Stat strip */}
+        <div className="grid grid-cols-4 divide-x border-b text-center">
+          {[
+            { label: "Active", value: visibleOrders.length, color: "text-foreground" },
+            { label: "Unassigned", value: unassignedOrders.length, color: "text-destructive" },
+            { label: "In Transit", value: visibleOrders.filter((o) => o.status === "in-transit").length, color: "text-orange-500" },
+            { label: "Drivers", value: onlineDrivers.length, color: "text-emerald-600" },
+          ].map((s) => (
+            <div key={s.label} className="py-2">
+              <p className={`text-base font-bold ${s.color}`}>{s.value}</p>
+              <p className="text-[10px] text-muted-foreground">{s.label}</p>
+            </div>
+          ))}
+        </div>
+
+        {/* Status filter chips */}
+        <div className="flex gap-1.5 overflow-x-auto border-b px-3 py-2 scrollbar-none">
+          {[
+            { key: "all", label: "All" },
+            { key: "unassigned", label: "Unassigned" },
+            { key: "assigned", label: "Assigned" },
+            { key: "in-transit", label: "In Transit" },
+            { key: "picked-up", label: "Picked Up" },
+          ].map((chip) => (
+            <button
+              key={chip.key}
+              type="button"
+              onClick={() => setStatusFilter(chip.key)}
+              className={`shrink-0 rounded-full px-2.5 py-1 text-[11px] font-medium transition-colors ${statusFilter === chip.key ? "bg-primary text-primary-foreground" : "border text-muted-foreground hover:bg-secondary"}`}
+            >
+              {chip.label}
+            </button>
+          ))}
+        </div>
+
+        {/* Search */}
         <div className="px-4 py-3">
           <div className="relative">
             <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
@@ -662,43 +804,70 @@ export default function RoutesPage() {
               type="text"
               value={searchTerm}
               onChange={(event) => setSearchTerm(event.target.value)}
-              placeholder="Search orders"
-              className="h-10 w-full rounded-md border bg-background pl-9 pr-3 text-sm outline-none ring-offset-background placeholder:text-muted-foreground focus-visible:ring-2 focus-visible:ring-ring"
+              onKeyDown={(e) => e.key === "Escape" && setSearchTerm("")}
+              placeholder="Search orders (↑↓ to navigate)"
+              className="h-9 w-full rounded-md border bg-background pl-9 pr-3 text-sm outline-none ring-offset-background placeholder:text-muted-foreground focus-visible:ring-2 focus-visible:ring-ring"
             />
           </div>
         </div>
 
-        <div className="flex-1 space-y-4 overflow-y-auto px-4 py-3">
+        <div className="flex-1 space-y-4 overflow-y-auto px-4 py-2">
           {/* Online drivers panel */}
           {onlineDrivers.length > 0 && (
             <div>
-              <p className="mb-2 text-sm font-semibold text-foreground">Online drivers ({onlineDrivers.length})</p>
+              <div className="mb-2 flex items-center justify-between">
+                <p className="text-sm font-semibold text-foreground">Online drivers ({onlineDrivers.length})</p>
+                {focusedDriverId && (
+                  <button type="button" onClick={() => setFocusedDriverId(null)} className="text-[11px] text-primary hover:underline">Show all</button>
+                )}
+              </div>
               <div className="space-y-1">
                 {onlineDrivers.map((driver) => {
                   const hasGps = Boolean(driver.lastLocation)
-                  const pingDate = driver.lastPingAt ? (driver.lastPingAt instanceof Date ? driver.lastPingAt : new Date(driver.lastPingAt as string)) : null
-                  const pingAgo = pingDate ? Math.round((Date.now() - pingDate.getTime()) / 1000) : null
-                  const pingRecent = pingAgo !== null && pingAgo < 30
-                  const pingStatus = pingAgo === null
-                    ? "No ping yet — app may not be running"
-                    : driver.lastPingError
-                      ? `Error: ${driver.lastPingError}`
-                      : pingRecent ? `Last ping ${pingAgo}s ago` : `Last ping ${pingAgo}s ago`
+                  const pingMs = driver.lastPingAt ? (typeof driver.lastPingAt === "object" && "seconds" in (driver.lastPingAt as object) ? (driver.lastPingAt as { seconds: number }).seconds * 1000 : Number(driver.lastPingAt)) : null
+                  const pingAgo = pingMs ? Math.round((Date.now() - pingMs) / 1000) : null
+                  const pingText = pingAgo === null ? "No ping yet" : pingAgo < 60 ? `${pingAgo}s ago` : `${Math.floor(pingAgo / 60)}m ago`
+                  const driverOrderCount = visibleOrders.filter((o) => o.assignedDriver === driver.id).length
+                  const isFocused = focusedDriverId === driver.id
                   return (
-                    <div key={driver.id} className="flex items-start gap-2 rounded-md border bg-background px-3 py-2" title={pingStatus}>
-                      <div className="mt-0.5 flex size-7 shrink-0 items-center justify-center rounded-full bg-[#1a1a2e] text-xs font-bold text-white">
-                        {(driver.name.trim().split(" ")[0]?.[0] ?? "?").toUpperCase()}
-                      </div>
-                      <div className="flex min-w-0 flex-1 flex-col">
-                        <span className="truncate text-sm font-medium text-foreground">{driver.name.split(" ")[0]}</span>
-                        {!hasGps && (
-                          <span className="text-[10px] text-amber-600 break-all leading-snug">{pingStatus}</span>
-                        )}
-                      </div>
+                    <div
+                      key={driver.id}
+                      className={`flex items-center gap-2 rounded-md border px-3 py-2 transition-colors ${isFocused ? "border-primary bg-primary/5" : "bg-background"}`}
+                    >
+                      <button
+                        type="button"
+                        onClick={() => setFocusedDriverId(isFocused ? null : driver.id)}
+                        className="flex min-w-0 flex-1 items-center gap-2 text-left"
+                        title={`Click to ${isFocused ? "unfocus" : "focus"} ${driver.name}'s orders`}
+                      >
+                        <div className="flex size-7 shrink-0 items-center justify-center rounded-full bg-[#1a1a2e] text-xs font-bold text-white">
+                          {(driver.name.trim().split(" ")[0]?.[0] ?? "?").toUpperCase()}
+                        </div>
+                        <div className="flex min-w-0 flex-1 flex-col">
+                          <span className="truncate text-sm font-medium text-foreground">{driver.name.split(" ")[0]}</span>
+                          <span className="text-[10px] text-muted-foreground">{pingText}</span>
+                          {!hasGps && driver.lastPingError && (
+                            <span className="text-[10px] text-amber-600 break-all leading-snug">{driver.lastPingError}</span>
+                          )}
+                        </div>
+                      </button>
+                      {driverOrderCount > 0 && (
+                        <span className="flex size-5 shrink-0 items-center justify-center rounded-full bg-emerald-500 text-[10px] font-bold text-white">{driverOrderCount}</span>
+                      )}
                       {hasGps
                         ? <Wifi className="size-3.5 shrink-0 text-emerald-500" aria-label="GPS active" />
                         : <WifiOff className="size-3.5 shrink-0 text-amber-500" aria-label="Waiting for GPS…" />
                       }
+                      {hasGps && (
+                        <button
+                          type="button"
+                          onClick={() => zoomToDriver(driver)}
+                          className="rounded p-1 text-muted-foreground hover:bg-secondary hover:text-foreground"
+                          aria-label={`Zoom to ${driver.name}`}
+                        >
+                          <LocateFixed className="size-3.5" />
+                        </button>
+                      )}
                     </div>
                   )
                 })}
@@ -707,62 +876,116 @@ export default function RoutesPage() {
           )}
 
           {/* Unassigned orders */}
-          <div>
-            <p className="mb-2 text-sm font-semibold text-foreground">Unassigned orders ({unassignedOrders.length})</p>
-            <div className="space-y-2">
-              {unassignedOrders.length === 0 && (
-                <p className="rounded-md border border-dashed p-3 text-xs text-muted-foreground">No unassigned orders</p>
-              )}
-              {unassignedOrders.map((order) => (
-                <button
-                  key={order.id}
-                  type="button"
-                  onClick={() => focusOrderOnMap(order)}
-                  className={`flex w-full items-start gap-3 rounded-lg border p-3 text-left transition ${selectedOrderId === order.id ? "border-red-400 bg-red-50 shadow-sm" : "hover:bg-secondary/40"}`}
-                >
-                  <div className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded border border-red-300">
-                    <div className={`h-2.5 w-2.5 rounded-sm ${selectedOrderId === order.id ? "bg-red-500" : ""}`} />
-                  </div>
-                  <div className="min-w-0 flex-1">
-                    <p className="text-sm font-bold text-foreground">#{order.orderNumber}</p>
-                    <p className="text-sm text-foreground">{order.customerName}</p>
-                    <p className="truncate text-xs text-muted-foreground">{order.address}</p>
-                  </div>
-                </button>
-              ))}
+          {(statusFilter === "all" || statusFilter === "unassigned") && !focusedDriverId && (
+            <div>
+              <p className="mb-2 text-sm font-semibold text-foreground">Unassigned orders ({unassignedOrders.length})</p>
+              <div className="space-y-2">
+                {unassignedOrders.length === 0 && (
+                  <p className="rounded-md border border-dashed p-3 text-xs text-muted-foreground">No unassigned orders</p>
+                )}
+                {unassignedOrders.map((order) => {
+                  const color = orderColor(order)
+                  const isSelected = selectedOrderId === order.id
+                  return (
+                    <div
+                      key={order.id}
+                      className={`overflow-hidden rounded-lg border transition ${isSelected ? "border-red-400 shadow-sm" : "hover:border-border/80"}`}
+                    >
+                      <button
+                        type="button"
+                        onClick={() => focusOrderOnMap(order)}
+                        className="flex w-full items-start gap-3 p-3 text-left"
+                      >
+                        <span className="mt-1 size-3 shrink-0 rounded-full" style={{ backgroundColor: color }} />
+                        <div className="min-w-0 flex-1">
+                          <p className="text-sm font-bold text-foreground">#{order.orderNumber}</p>
+                          <p className="text-sm text-foreground">{order.customerName}</p>
+                          <p className="truncate text-xs text-muted-foreground">{order.address}</p>
+                          {order.distanceKm != null && (
+                            <p className="mt-0.5 text-[11px] text-muted-foreground">{order.distanceKm.toFixed(1)} km · ~{Math.round(order.distanceKm / 0.5)} min</p>
+                          )}
+                        </div>
+                      </button>
+                      <div className="flex items-center gap-1 border-t px-3 py-1.5">
+                        <button
+                          type="button"
+                          onClick={() => copyAddress(order.id, order.address)}
+                          className="flex items-center gap-1 text-[10px] text-muted-foreground hover:text-foreground"
+                        >
+                          {copiedId === order.id ? <Check className="size-3 text-emerald-500" /> : <Copy className="size-3" />}
+                          {copiedId === order.id ? "Copied" : "Copy address"}
+                        </button>
+                        {order.phone && (
+                          <span className="ml-auto text-[10px] text-muted-foreground">{order.phone}</span>
+                        )}
+                      </div>
+                    </div>
+                  )
+                })}
+              </div>
             </div>
-          </div>
+          )}
 
-          {/* Assigned orders */}
+          {/* Assigned / filtered orders */}
           <div>
-            <p className="mb-2 text-sm font-semibold text-foreground">Assigned orders ({assignedOrders.length})</p>
+            <p className="mb-2 text-sm font-semibold text-foreground">
+              {focusedDriverId
+                ? `${drivers.find((d) => d.id === focusedDriverId)?.name.split(" ")[0] ?? "Driver"}'s orders (${filteredOrders.length})`
+                : `Assigned orders (${assignedOrders.length})`}
+            </p>
             <div className="space-y-2">
-              {assignedOrders.length === 0 && (
-                <p className="rounded-md border border-dashed p-3 text-xs text-muted-foreground">No assigned orders</p>
+              {(focusedDriverId ? filteredOrders : assignedOrders).length === 0 && (
+                <p className="rounded-md border border-dashed p-3 text-xs text-muted-foreground">No orders</p>
               )}
-              {assignedOrders.map((order) => {
+              {(focusedDriverId ? filteredOrders : assignedOrders).map((order) => {
                 const driver = drivers.find((d) => d.id === order.assignedDriver)
+                const color = orderColor(order)
+                const isSelected = selectedOrderId === order.id
                 return (
-                  <button
+                  <div
                     key={order.id}
-                    type="button"
-                    onClick={() => focusOrderOnMap(order)}
-                    className={`flex w-full items-start gap-3 rounded-lg border p-3 text-left transition ${selectedOrderId === order.id ? "border-blue-400 bg-blue-50 shadow-sm" : "hover:bg-secondary/40"}`}
+                    className={`overflow-hidden rounded-lg border transition ${isSelected ? "border-blue-400 shadow-sm" : "hover:border-border/80"}`}
                   >
-                    <div className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded border border-blue-300">
-                      <div className={`h-2.5 w-2.5 rounded-sm ${selectedOrderId === order.id ? "bg-blue-500" : ""}`} />
+                    <button
+                      type="button"
+                      onClick={() => focusOrderOnMap(order)}
+                      className="flex w-full items-start gap-3 p-3 text-left"
+                    >
+                      <span className="mt-1 size-3 shrink-0 rounded-full" style={{ backgroundColor: color }} />
+                      <div className="min-w-0 flex-1">
+                        <p className="text-sm font-bold text-foreground">#{order.orderNumber}</p>
+                        <p className="text-sm text-foreground">{order.customerName}</p>
+                        <p className="truncate text-xs text-muted-foreground">{order.address}</p>
+                        {order.distanceKm != null && (
+                          <p className="mt-0.5 text-[11px] text-muted-foreground">{order.distanceKm.toFixed(1)} km · ~{Math.round(order.distanceKm / 0.5)} min</p>
+                        )}
+                        {driver && !focusedDriverId && (
+                          <p className="mt-1 truncate text-[11px] font-medium text-blue-600">Driver: {driver.name}</p>
+                        )}
+                      </div>
+                    </button>
+                    {/* Expanded detail for selected order */}
+                    {isSelected && (
+                      <div className="border-t bg-secondary/30 px-3 py-2 text-xs text-muted-foreground space-y-0.5">
+                        {order.phone && <p><span className="font-medium text-foreground">Phone:</span> {order.phone}</p>}
+                        {order.amount != null && <p><span className="font-medium text-foreground">Amount:</span> ₦{order.amount.toLocaleString()}</p>}
+                        {order.paymentMethod && <p><span className="font-medium text-foreground">Payment:</span> {order.paymentMethod}</p>}
+                        {order.pickupAddress && <p><span className="font-medium text-foreground">Pickup:</span> {order.pickupAddress}</p>}
+                        {order.deliveryInstruction && <p><span className="font-medium text-foreground">Note:</span> {order.deliveryInstruction}</p>}
+                      </div>
+                    )}
+                    <div className="flex items-center gap-1 border-t px-3 py-1.5">
+                      <button
+                        type="button"
+                        onClick={() => copyAddress(order.id, order.address)}
+                        className="flex items-center gap-1 text-[10px] text-muted-foreground hover:text-foreground"
+                      >
+                        {copiedId === order.id ? <Check className="size-3 text-emerald-500" /> : <Copy className="size-3" />}
+                        {copiedId === order.id ? "Copied" : "Copy address"}
+                      </button>
+                      <span className="ml-auto capitalize text-[10px]" style={{ color }}>{order.status}</span>
                     </div>
-                    <div className="min-w-0 flex-1">
-                      <p className="text-sm font-bold text-foreground">#{order.orderNumber}</p>
-                      <p className="text-sm text-foreground">{order.customerName}</p>
-                      <p className="truncate text-xs text-muted-foreground">{order.address}</p>
-                      {driver && (
-                        <p className="mt-1 truncate text-xs font-medium text-blue-600">
-                          Driver: {driver.name}
-                        </p>
-                      )}
-                    </div>
-                  </button>
+                  </div>
                 )
               })}
             </div>
@@ -770,10 +993,46 @@ export default function RoutesPage() {
         </div>
       </aside>
 
-      <section className="relative h-full overflow-hidden bg-card">
-        <div ref={mapContainerRef} className="h-full w-full" />
+      <section className={`relative overflow-hidden bg-card ${mobileView === "map" ? "flex flex-1 flex-col" : "hidden"} xl:flex xl:flex-1 xl:flex-col`}>
+        <div ref={mapContainerRef} className="absolute inset-0" />
 
-        {/* Legend — bottom-right, Shipday-style */}
+        {/* Map overlay controls — top-right */}
+        <div className="absolute right-3 top-3 flex flex-col gap-2">
+          {/* Fit all bounds */}
+          <button
+            onClick={fitAllBounds}
+            className="flex items-center gap-1.5 rounded-lg bg-white/95 px-3 py-1.5 text-xs font-medium shadow-md hover:bg-white"
+            title="Fit all markers"
+          >
+            <LocateFixed className="size-3.5 text-primary" />
+            Fit all
+          </button>
+          {/* Map type toggle */}
+          <button
+            onClick={() => setMapType((t) => t === "roadmap" ? "satellite" : "roadmap")}
+            className="flex items-center gap-1.5 rounded-lg bg-white/95 px-3 py-1.5 text-xs font-medium shadow-md hover:bg-white"
+            title="Toggle map type"
+          >
+            <Layers className="size-3.5 text-primary" />
+            {mapType === "roadmap" ? "Satellite" : "Roadmap"}
+          </button>
+          {/* Fullscreen toggle */}
+          <button
+            onClick={() => setIsFullscreen((f) => !f)}
+            className="flex items-center gap-1.5 rounded-lg bg-white/95 px-3 py-1.5 text-xs font-medium shadow-md hover:bg-white xl:flex"
+            title={isFullscreen ? "Show sidebar" : "Fullscreen map"}
+          >
+            {isFullscreen ? <Minimize2 className="size-3.5 text-primary" /> : <Maximize2 className="size-3.5 text-primary" />}
+            {isFullscreen ? "Sidebar" : "Fullscreen"}
+          </button>
+        </div>
+
+        {/* Keyboard nav hint */}
+        <div className="pointer-events-none absolute left-3 top-3 flex items-center gap-1 rounded-lg bg-white/80 px-2 py-1 text-[10px] text-muted-foreground shadow">
+          <ChevronUp className="size-3" /><ChevronDown className="size-3" /> navigate orders
+        </div>
+
+        {/* Legend — bottom-right */}
         <div className="pointer-events-none absolute bottom-4 right-4 flex items-center gap-3 rounded-lg bg-white/95 px-4 py-2 text-xs shadow-md">
           <span className="flex items-center gap-1.5">
             <span className="inline-block h-3 w-3 rounded-full bg-amber-500" /> Hub
@@ -797,16 +1056,21 @@ export default function RoutesPage() {
           <div className="pointer-events-none absolute bottom-4 left-4 max-w-xs rounded-lg bg-white/95 p-3 text-xs shadow-md">
             <p className="font-bold text-foreground">#{selectedOrder.orderNumber} · {selectedOrder.customerName}</p>
             <p className="mt-0.5 text-muted-foreground">{selectedOrder.address}</p>
+            {selectedOrder.phone && <p className="mt-0.5 text-muted-foreground">{selectedOrder.phone}</p>}
             <div className="mt-1.5 flex items-center gap-2">
               <span className="inline-block h-2.5 w-2.5 rounded-full" style={{ backgroundColor: orderColor(selectedOrder) }} />
               <span className="font-medium capitalize" style={{ color: orderColor(selectedOrder) }}>{selectedOrder.status}</span>
               {selectedOrder.distanceKm != null && (
-                <span className="text-muted-foreground">· {selectedOrder.distanceKm.toFixed(1)} km</span>
+                <span className="text-muted-foreground">· {selectedOrder.distanceKm.toFixed(1)} km · ~{Math.round(selectedOrder.distanceKm / 0.5)} min</span>
               )}
             </div>
+            {selectedOrder.amount != null && (
+              <p className="mt-1 text-muted-foreground">Amount: ₦{selectedOrder.amount.toLocaleString()}</p>
+            )}
           </div>
         )}
       </section>
+      </div>
     </div>
   )
 }

@@ -1,4 +1,4 @@
-import type { Metadata } from 'next'
+import type { Metadata, Viewport } from 'next'
 import { Inter, Space_Grotesk } from 'next/font/google'
 import './globals.css'
 // Validate environment variables at startup
@@ -6,6 +6,13 @@ import '@/lib/env'
 
 const _inter = Inter({ subsets: ["latin"], variable: "--font-inter" });
 const _spaceGrotesk = Space_Grotesk({ subsets: ["latin"], variable: "--font-space-grotesk" });
+
+export const viewport: Viewport = {
+  width: 'device-width',
+  initialScale: 1,
+  themeColor: '#d6336c',
+  viewportFit: 'cover',
+}
 
 export const metadata: Metadata = {
   title: 'Sterlinglams Logistics — Fast & Reliable Delivery',
@@ -37,7 +44,7 @@ export default function RootLayout({
   children: React.ReactNode
 }>) {
   return (
-    <html lang="en" suppressHydrationWarning>
+    <html lang="en" className={`${_inter.variable} ${_spaceGrotesk.variable}`} suppressHydrationWarning>
       <body className="font-sans antialiased">
         {children}
       </body>

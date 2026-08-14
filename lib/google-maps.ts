@@ -1,38 +1,75 @@
 /** Shared Google Maps JavaScript API loader (singleton) */
 
-const API_KEY = process.env.NEXT_PUBLIC_GOOGLE_MAPS_KEY ?? ""
+const ENV_API_KEY = process.env.NEXT_PUBLIC_GOOGLE_MAPS_KEY ?? ""
 
 let loadPromise: Promise<typeof google.maps> | null = null
+
+/** The key actually used for the last load — also used by the REST helpers
+ *  below so they stay in sync with whatever the map itself is using. */
+let activeKey = ENV_API_KEY
+
+/**
+ * Fetches the key configured in Admin → Settings → Integrations, falling back to
+ * the build-time env var. This is what lets a broken key be replaced from the
+ * dashboard without redeploying.
+ */
+async function resolveApiKey(): Promise<string> {
+  try {
+    const res = await fetch("/api/maps-key")
+    if (res.ok) {
+      const data = (await res.json()) as { key?: string }
+      if (data.key?.trim()) return data.key.trim()
+    }
+  } catch {
+    // Network/API failure — fall back to the build-time key.
+  }
+  return ENV_API_KEY
+}
 
 export function loadGoogleMaps(): Promise<typeof google.maps> {
   if (loadPromise) return loadPromise
 
-  loadPromise = new Promise((resolve, reject) => {
+  loadPromise = (async () => {
     if (typeof window === "undefined") {
-      reject(new Error("Cannot load Google Maps on the server"))
-      return
+      throw new Error("Cannot load Google Maps on the server")
     }
 
     // Already loaded
-    if (window.google?.maps?.Map) {
-      resolve(window.google.maps)
-      return
-    }
+    if (window.google?.maps?.Map) return window.google.maps
 
-    const script = document.createElement("script")
-    script.src = `https://maps.googleapis.com/maps/api/js?key=${API_KEY}&libraries=places`
-    script.async = true
-    script.defer = true
-    script.onload = () => resolve(window.google.maps)
-    script.onerror = () => {
-      // Allow retries on subsequent calls if the first load fails.
-      loadPromise = null
-      reject(new Error("Failed to load Google Maps"))
-    }
-    document.head.appendChild(script)
-  })
+    activeKey = await resolveApiKey()
+
+    return new Promise<typeof google.maps>((resolve, reject) => {
+      const script = document.createElement("script")
+      script.src = `https://maps.googleapis.com/maps/api/js?key=${activeKey}&libraries=places`
+      script.async = true
+      script.defer = true
+      script.onload = () => resolve(window.google.maps)
+      script.onerror = () => {
+        // Allow retries on subsequent calls if the first load fails.
+        loadPromise = null
+        reject(new Error("Failed to load Google Maps"))
+      }
+      document.head.appendChild(script)
+    })
+  })()
+
+  // A rejected load must not poison every later call.
+  loadPromise.catch(() => { loadPromise = null })
 
   return loadPromise
+}
+
+/**
+ * Discards the cached loader so the next call re-reads the key. Call after
+ * saving a new key in settings; a full reload is still needed to swap the
+ * already-injected Maps script.
+ */
+export function resetGoogleMapsLoader(): void {
+  loadPromise = null
+  // Blank rather than ENV_API_KEY so the next call re-resolves from settings
+  // instead of falling back to a stale build-time key.
+  activeKey = ""
 }
 
 const geocodeCache = new Map<string, { lat: number; lng: number }>()
@@ -77,7 +114,10 @@ export async function fetchDirectionsRoute(
   durationSeconds: number
 } | null> {
   try {
-    const url = `https://maps.googleapis.com/maps/api/directions/json?origin=${origin.lat},${origin.lng}&destination=${destination.lat},${destination.lng}&key=${API_KEY}`
+    // Use the same key the map itself loaded with, resolving it if no map has
+    // been mounted yet on this page.
+    const key = activeKey || (await resolveApiKey())
+    const url = `https://maps.googleapis.com/maps/api/directions/json?origin=${origin.lat},${origin.lng}&destination=${destination.lat},${destination.lng}&key=${key}`
     const res = await fetch(url)
     if (!res.ok) return null
     const data = await res.json()

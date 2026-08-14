@@ -4,6 +4,14 @@ import { useEffect, useState } from "react"
 import { Label } from "@/components/ui/label"
 import { Button } from "@/components/ui/button"
 import { Switch } from "@/components/ui/switch"
+import { Input } from "@/components/ui/input"
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
 import { Save, Loader2 } from "lucide-react"
 import { doc, getDoc, setDoc } from "firebase/firestore"
 import { logActivity } from "@/lib/activity-client"
@@ -22,6 +30,8 @@ interface DriverSettings {
   requireProofOfPickup: boolean
   requireIdScanning: boolean
   driversCanReoptimizeRoute: boolean
+  gpsPingIntervalSeconds: 10 | 30 | 60
+  earningsPerKmRate: number
 }
 
 const DEFAULT: DriverSettings = {
@@ -36,6 +46,8 @@ const DEFAULT: DriverSettings = {
   requireProofOfPickup: false,
   requireIdScanning: false,
   driversCanReoptimizeRoute: true,
+  gpsPingIntervalSeconds: 30,
+  earningsPerKmRate: 0,
 }
 
 const DRIVER_SETTINGS_DOC = "driverSettings"
@@ -124,6 +136,52 @@ export function DriverSettingsPanel() {
           </div>
         ))}
       </div>
+
+      <hr className="border-border" />
+
+      {/* GPS & Earnings */}
+      <section className="space-y-6">
+        <div>
+          <h3 className="text-base font-semibold">GPS &amp; Earnings</h3>
+          <p className="text-sm text-muted-foreground">Configure location tracking frequency and driver pay rate</p>
+        </div>
+
+        <div className="space-y-2">
+          <Label htmlFor="ping-interval">GPS ping interval</Label>
+          <Select
+            value={String(driver.gpsPingIntervalSeconds)}
+            onValueChange={(v) => setDriver((prev) => ({ ...prev, gpsPingIntervalSeconds: Number(v) as 10 | 30 | 60 }))}
+          >
+            <SelectTrigger id="ping-interval" className="w-48">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="10">Every 10 seconds (high accuracy)</SelectItem>
+              <SelectItem value="30">Every 30 seconds (balanced)</SelectItem>
+              <SelectItem value="60">Every 60 seconds (battery saver)</SelectItem>
+            </SelectContent>
+          </Select>
+          <p className="text-xs text-muted-foreground">Shorter intervals give more accurate live tracking but drain driver battery faster</p>
+        </div>
+
+        <div className="space-y-2">
+          <Label htmlFor="earnings-rate">Earnings rate per km ({driver.earningsPerKmRate > 0 ? `₦${driver.earningsPerKmRate}/km` : "disabled"})</Label>
+          <div className="flex items-center gap-2">
+            <span className="text-sm text-muted-foreground">₦</span>
+            <Input
+              id="earnings-rate"
+              type="number"
+              min={0}
+              step={50}
+              value={driver.earningsPerKmRate}
+              onChange={(e) => setDriver((prev) => ({ ...prev, earningsPerKmRate: Number(e.target.value) }))}
+              className="w-36"
+            />
+            <span className="text-sm text-muted-foreground">/ km</span>
+          </div>
+          <p className="text-xs text-muted-foreground">Set to 0 to disable earnings calculation. Shown to drivers if &ldquo;Show earning info&rdquo; is on.</p>
+        </div>
+      </section>
 
       <div className="pt-4">
         <Button onClick={save} disabled={saving} className="w-full sm:w-auto">

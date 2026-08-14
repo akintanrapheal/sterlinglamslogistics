@@ -4,7 +4,8 @@ import { useEffect, useState } from "react"
 import { Label } from "@/components/ui/label"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
-import { Save, Loader2 } from "lucide-react"
+import { Save, Loader2, Eye, Moon } from "lucide-react"
+import { Switch } from "@/components/ui/switch"
 import { doc, getDoc, setDoc } from "firebase/firestore"
 import { logActivity } from "@/lib/activity-client"
 import { db } from "@/lib/firebase"
@@ -17,6 +18,9 @@ interface BrandSettings {
   trackingPageTagline: string
   emailHeaderColor: string
   emailFooterText: string
+  trackingPageDarkMode: boolean
+  smsTemplate: string
+  emailTemplate: string
 }
 
 const DEFAULT: BrandSettings = {
@@ -26,6 +30,9 @@ const DEFAULT: BrandSettings = {
   trackingPageTagline: "Real-time updates for your order",
   emailHeaderColor: "#000000",
   emailFooterText: "Thank you for shopping with us.",
+  trackingPageDarkMode: false,
+  smsTemplate: "Hi {customerName}, your order #{orderNumber} is on the way! Track: {trackingLink}",
+  emailTemplate: "Hi {customerName},\n\nYour order #{orderNumber} is out for delivery.\nEstimated arrival: {ETA}.\n\nTrack: {trackingLink}\n\n{footer}",
 }
 
 const SETTINGS_DOC = "brandSettings"
@@ -204,6 +211,62 @@ export function BrandSettingsPanel() {
             value={settings.emailFooterText}
             onChange={(e) => update("emailFooterText", e.target.value)}
             placeholder="Thank you for shopping with us."
+          />
+        </div>
+
+        {/* Dark mode tracking page */}
+        <div className="flex items-center justify-between">
+          <div>
+            <Label htmlFor="dark-mode" className="flex items-center gap-1.5 font-normal">
+              <Moon className="size-4" /> Dark mode for tracking page
+            </Label>
+            <p className="text-xs text-muted-foreground">Customer tracking page renders in dark mode</p>
+          </div>
+          <Switch id="dark-mode" checked={settings.trackingPageDarkMode} onCheckedChange={(v) => update("trackingPageDarkMode", v)} />
+        </div>
+      </section>
+
+      {/* Message templates */}
+      <section className="space-y-4">
+        <div>
+          <h3 className="text-base font-semibold">Message templates</h3>
+          <p className="text-sm text-muted-foreground">
+            Customise the text sent to customers. Available variables:{" "}
+            <code className="font-mono text-xs">{`{customerName} {orderNumber} {trackingLink} {ETA} {footer}`}</code>
+          </p>
+        </div>
+
+        <div className="space-y-2">
+          <Label htmlFor="sms-template">SMS / WhatsApp template</Label>
+          <textarea
+            id="sms-template"
+            rows={3}
+            value={settings.smsTemplate}
+            onChange={(e) => update("smsTemplate", e.target.value)}
+            className="w-full rounded-md border bg-background px-3 py-2 text-sm outline-none ring-offset-background placeholder:text-muted-foreground focus-visible:ring-2 focus-visible:ring-ring resize-none"
+          />
+          {/* Live preview */}
+          <div className="rounded-md border bg-secondary/30 p-3 text-xs text-muted-foreground">
+            <p className="mb-1 font-medium text-foreground flex items-center gap-1"><Eye className="size-3" /> Preview</p>
+            <p className="whitespace-pre-wrap break-words">
+              {settings.smsTemplate
+                .replace("{customerName}", "Amaka")
+                .replace("{orderNumber}", "1042")
+                .replace("{trackingLink}", "https://yoursite.com/track/abc")
+                .replace("{ETA}", "2:30 PM")
+                .replace("{footer}", "")}
+            </p>
+          </div>
+        </div>
+
+        <div className="space-y-2">
+          <Label htmlFor="email-template">Email body template</Label>
+          <textarea
+            id="email-template"
+            rows={6}
+            value={settings.emailTemplate}
+            onChange={(e) => update("emailTemplate", e.target.value)}
+            className="w-full rounded-md border bg-background px-3 py-2 text-sm outline-none ring-offset-background placeholder:text-muted-foreground focus-visible:ring-2 focus-visible:ring-ring resize-none font-mono"
           />
         </div>
       </section>

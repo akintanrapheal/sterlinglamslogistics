@@ -26,6 +26,10 @@ interface DispatchSettings {
   requireDriverConfirmation: boolean
   maxOrdersPerDriver: number
   notifyDriverOnAssign: boolean
+  slaEnabled: boolean
+  slaHours: number
+  graceMinutes: number
+  autoReassignEnabled: boolean
 }
 
 const DEFAULT: DispatchSettings = {
@@ -36,6 +40,10 @@ const DEFAULT: DispatchSettings = {
   requireDriverConfirmation: false,
   maxOrdersPerDriver: 20,
   notifyDriverOnAssign: true,
+  slaEnabled: false,
+  slaHours: 4,
+  graceMinutes: 10,
+  autoReassignEnabled: false,
 }
 
 const SETTINGS_DOC = "dispatchSettings"
@@ -218,6 +226,68 @@ export function DispatchSettingsPanel() {
             onCheckedChange={(v) => update("notifyDriverOnAssign", v)}
           />
         </div>
+      </section>
+
+      {/* SLA */}
+      <section className="space-y-4">
+        <div>
+          <h3 className="text-base font-semibold">SLA target</h3>
+          <p className="text-sm text-muted-foreground">
+            Flag orders that exceed a target delivery time. Overdue orders are highlighted in the dispatch view.
+          </p>
+        </div>
+
+        <div className="flex items-center justify-between">
+          <Label htmlFor="sla-enabled" className="font-normal">Enable SLA tracking</Label>
+          <Switch id="sla-enabled" checked={settings.slaEnabled} onCheckedChange={(v) => update("slaEnabled", v)} />
+        </div>
+
+        {settings.slaEnabled && (
+          <div className="space-y-2 pl-4 border-l-2 border-muted">
+            <Label htmlFor="sla-hours">Target delivery time (hours)</Label>
+            <Input
+              id="sla-hours"
+              type="number"
+              min={1}
+              max={72}
+              value={settings.slaHours}
+              onChange={(e) => update("slaHours", Number(e.target.value))}
+              className="w-28"
+            />
+            <p className="text-xs text-muted-foreground">Orders older than this threshold are flagged as overdue</p>
+          </div>
+        )}
+      </section>
+
+      {/* Grace period & auto-reassign */}
+      <section className="space-y-4">
+        <div>
+          <h3 className="text-base font-semibold">Grace period &amp; auto-reassign</h3>
+          <p className="text-sm text-muted-foreground">
+            If a driver does not accept an order within the grace period, unassign and reassign automatically.
+          </p>
+        </div>
+
+        <div className="flex items-center justify-between">
+          <Label htmlFor="auto-reassign" className="font-normal">Enable auto-reassign</Label>
+          <Switch id="auto-reassign" checked={settings.autoReassignEnabled} onCheckedChange={(v) => update("autoReassignEnabled", v)} />
+        </div>
+
+        {settings.autoReassignEnabled && (
+          <div className="space-y-2 pl-4 border-l-2 border-muted">
+            <Label htmlFor="grace-minutes">Grace period (minutes)</Label>
+            <Input
+              id="grace-minutes"
+              type="number"
+              min={1}
+              max={60}
+              value={settings.graceMinutes}
+              onChange={(e) => update("graceMinutes", Number(e.target.value))}
+              className="w-28"
+            />
+            <p className="text-xs text-muted-foreground">Order is unassigned after this many minutes without driver acceptance</p>
+          </div>
+        )}
       </section>
 
       <div className="pt-2">

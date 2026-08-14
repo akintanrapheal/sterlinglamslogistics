@@ -1,6 +1,11 @@
 import { NextResponse } from "next/server"
 import { verifyDriverSession } from "@/lib/server/driver-session"
 import { checkRateLimit, getRateLimitIdentifier } from "@/lib/rate-limit"
+import { geocodeAddress, getGeocodeHealth } from "@/lib/geocode"
+import { getServerMapsKey } from "@/lib/server/maps-key"
+import { createLogger } from "@/lib/logger"
+
+const log = createLogger("api:driver:geocode")
 
 export async function GET(req: Request) {
   const rl = await checkRateLimit(getRateLimitIdentifier(req))
@@ -13,38 +18,26 @@ export async function GET(req: Request) {
   const address = searchParams.get("address")
   if (!address) return NextResponse.json({ ok: false, error: "address required" }, { status: 400 })
 
-  const q = address.trim()
+  // Google Geocoding with an OpenStreetMap fallback; config failures (billing,
+  // key restrictions, quota) are logged rather than silently swallowed.
+  const coords = await geocodeAddress(address.trim(), {
+    apiKey: await getServerMapsKey(),
+    userAgent: "sterlinglams-delivery/1.0",
+  })
+  if (coords) return NextResponse.json({ ok: true, lat: coords.lat, lng: coords.lng })
 
-  // Try Google Maps Geocoding first
-  const key = process.env.NEXT_PUBLIC_GOOGLE_MAPS_KEY ?? ""
-  if (key) {
-    try {
-      const res = await fetch(
-        `https://maps.googleapis.com/maps/api/geocode/json?address=${encodeURIComponent(q)}&key=${key}`
-      )
-      if (res.ok) {
-        const data = await res.json() as { results?: Array<{ geometry: { location: { lat: number; lng: number } } }> }
-        const loc = data.results?.[0]?.geometry?.location
-        if (loc) return NextResponse.json({ ok: true, lat: loc.lat, lng: loc.lng })
-      }
-    } catch { /* fall through to Nominatim */ }
-  }
-
-  // Fallback: Nominatim (OpenStreetMap) — no API key required
-  try {
-    const res = await fetch(
-      `https://nominatim.openstreetmap.org/search?format=jsonv2&limit=1&q=${encodeURIComponent(q)}`,
-      { headers: { Accept: "application/json", "User-Agent": "sterlinglams-delivery/1.0" } }
+  const health = getGeocodeHealth()
+  if (health.lastError) {
+    // Not the driver's fault and not a bad address — the geocoder is down.
+    log.error(
+      { status: health.lastError.status, message: health.lastError.message },
+      "Geocoding provider is misconfigured"
     )
-    if (!res.ok) return NextResponse.json({ ok: false, error: "Not found" }, { status: 404 })
-    const data = await res.json() as Array<{ lat: string; lon: string }>
-    const result = data?.[0]
-    if (!result) return NextResponse.json({ ok: false, error: "Not found" }, { status: 404 })
-    const lat = Number(result.lat)
-    const lng = Number(result.lon)
-    if (isNaN(lat) || isNaN(lng)) return NextResponse.json({ ok: false, error: "Invalid coords" }, { status: 404 })
-    return NextResponse.json({ ok: true, lat, lng })
-  } catch {
-    return NextResponse.json({ ok: false, error: "Geocoding failed" }, { status: 500 })
+    return NextResponse.json(
+      { ok: false, error: "Geocoding temporarily unavailable" },
+      { status: 503 }
+    )
   }
+
+  return NextResponse.json({ ok: false, error: "Not found" }, { status: 404 })
 }

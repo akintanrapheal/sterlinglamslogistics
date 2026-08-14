@@ -19,13 +19,32 @@ export async function POST(req: Request) {
   try {
     const prefixesCleaned = await adminCleanOrderNumbersWC()
     const duplicatesRemoved = await adminRemoveDuplicateOrders()
-    const coordsBackfilled = await adminBackfillOrderCoords()
+    const coords = await adminBackfillOrderCoords()
 
-    const details = { prefixesCleaned, duplicatesRemoved, coordsBackfilled }
+    const details = {
+      prefixesCleaned,
+      duplicatesRemoved,
+      coordsBackfilled: coords.updated,
+      coordsFailed: coords.failed,
+      geocoderError: coords.geocoderError,
+    }
     log.info(details, "Clean orders completed")
+    if (coords.geocoderError) {
+      log.error(
+        { geocoderError: coords.geocoderError, coordsFailed: coords.failed },
+        "Geocoding is misconfigured — orders were left without coordinates"
+      )
+    }
     await audit({ action: "admin.clean_orders", actor: admin.uid, details })
 
-    return NextResponse.json({ ok: true, prefixesCleaned, duplicatesRemoved, coordsBackfilled })
+    return NextResponse.json({
+      ok: true,
+      prefixesCleaned,
+      duplicatesRemoved,
+      coordsBackfilled: coords.updated,
+      coordsFailed: coords.failed,
+      geocoderError: coords.geocoderError,
+    })
   } catch (error) {
     log.error({ error }, "Clean orders failed")
     return NextResponse.json({ ok: false, error: String(error) }, { status: 500 })

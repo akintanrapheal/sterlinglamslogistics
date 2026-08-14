@@ -25,6 +25,9 @@ interface RouteSettings {
   returnToHubAfterDelivery: boolean
   allowDriverReorder: boolean
   trafficAware: boolean
+  deliveryTimeWindowsEnabled: boolean
+  avoidHighways: boolean
+  avoidTolls: boolean
 }
 
 const DEFAULT: RouteSettings = {
@@ -34,6 +37,9 @@ const DEFAULT: RouteSettings = {
   returnToHubAfterDelivery: false,
   allowDriverReorder: true,
   trafficAware: false,
+  deliveryTimeWindowsEnabled: false,
+  avoidHighways: false,
+  avoidTolls: false,
 }
 
 const SETTINGS_DOC = "routeSettings"
@@ -198,6 +204,57 @@ export function RouteSettingsPanel() {
             onCheckedChange={(v) => update("trafficAware", v)}
           />
         </div>
+
+        <div className="flex items-center justify-between">
+          <div>
+            <Label htmlFor="avoid-highways" className="font-normal">Avoid highways</Label>
+            <p className="text-xs text-muted-foreground">
+              Passes <code className="font-mono">avoidHighways: true</code> to Google Maps route calculations
+            </p>
+          </div>
+          <Switch
+            id="avoid-highways"
+            checked={settings.avoidHighways}
+            onCheckedChange={(v) => update("avoidHighways", v)}
+          />
+        </div>
+
+        <div className="flex items-center justify-between">
+          <div>
+            <Label htmlFor="avoid-tolls" className="font-normal">Avoid tolls</Label>
+            <p className="text-xs text-muted-foreground">
+              Passes <code className="font-mono">avoidTolls: true</code> to Google Maps route calculations
+            </p>
+          </div>
+          <Switch
+            id="avoid-tolls"
+            checked={settings.avoidTolls}
+            onCheckedChange={(v) => update("avoidTolls", v)}
+          />
+        </div>
+      </section>
+
+      {/* Delivery time windows */}
+      <section className="space-y-4">
+        <div>
+          <h3 className="text-base font-semibold">Delivery time windows</h3>
+          <p className="text-sm text-muted-foreground">
+            Allow customers to specify a preferred delivery window (e.g. 10am – 2pm). Drivers see the window on each stop.
+          </p>
+        </div>
+        <div className="flex items-center justify-between">
+          <Label htmlFor="time-windows" className="font-normal">Enable customer time windows</Label>
+          <Switch
+            id="time-windows"
+            checked={settings.deliveryTimeWindowsEnabled}
+            onCheckedChange={(v) => update("deliveryTimeWindowsEnabled", v)}
+          />
+        </div>
+        {settings.deliveryTimeWindowsEnabled && (
+          <p className="text-xs text-muted-foreground pl-4 border-l-2 border-muted">
+            When enabled, a time-window picker appears on the order form and is displayed to the driver in the mobile app.
+          </p>
+        )}
       </section>
 
       <div className="pt-2">

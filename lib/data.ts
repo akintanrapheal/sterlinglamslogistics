@@ -54,7 +54,13 @@ export interface Order {
   driverRating?: number
   customerFeedback?: string
   customerRatedAt?: unknown
+  adminReply?: string
+  adminRepliedAt?: unknown
+  featured?: boolean
   distanceKm?: number
+  urgent?: boolean
+  adminNote?: string
+  deliveryAttempts?: number
   lat?: number
   lng?: number
   routeOrder?: number

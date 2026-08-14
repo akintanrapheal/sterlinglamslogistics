@@ -6,6 +6,7 @@ import { adminDb, adminStorage } from "@/lib/server/firebase-admin"
 import { createLogger } from "@/lib/logger"
 import { resolveDriverIdFromRequest } from "@/lib/server/driver-auth"
 import { notifyOrderEventServer } from "@/lib/server/notify-order-event"
+import { notifyStoreDelivered } from "@/lib/server/notify-store-delivered"
 import type { Order } from "@/lib/data"
 import type { OrderEvent } from "@/lib/server/notifications"
 
@@ -292,6 +293,12 @@ export async function POST(
       } catch (err) {
         log.error({ err, orderId, event: notificationEvent }, "Failed to dispatch notifications")
       }
+    }
+
+    // Tell the Sterlin Glams store the order was delivered so it flips its own status to Delivered.
+    // Best-effort; orders the store doesn't recognise are ignored there.
+    if (nextStatus === "delivered" && order) {
+      await notifyStoreDelivered((order as Order).orderNumber, body.signerName?.trim() || undefined)
     }
 
     return NextResponse.json({ ok: true })

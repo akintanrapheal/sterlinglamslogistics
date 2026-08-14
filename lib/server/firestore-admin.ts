@@ -1,78 +1,14 @@
 import { adminDb } from "./firebase-admin"
 import { hashPassword, isHashed } from "@/lib/password"
 import { ORDER_STATUS } from "@/lib/constants"
+import { geocodeAddress, haversineDistanceKm, getHubCoordinates, getGeocodeHealth } from "@/lib/geocode"
+import { getServerMapsKey } from "./maps-key"
 import type { Order, Driver } from "@/lib/data"
-
-// ── Geocoding (REST, no SDK dependency) ──────────────────────────────────────
-
-type LatLng = { lat: number; lng: number }
-
-const DEFAULT_HUB_COORDS: LatLng = { lat: 6.4642667, lng: 3.5554814 }
-
-function getHubCoordinates(): LatLng {
-  const rawLat = Number(process.env.NEXT_PUBLIC_HUB_LAT)
-  const rawLng = Number(process.env.NEXT_PUBLIC_HUB_LNG)
-  if (!Number.isNaN(rawLat) && !Number.isNaN(rawLng)) return { lat: rawLat, lng: rawLng }
-  return DEFAULT_HUB_COORDS
-}
-
-const geocodeCache = new Map<string, LatLng>()
-
-async function geocodeAddress(address: string): Promise<LatLng | null> {
-  const q = address.trim()
-  if (!q) return null
-  const cached = geocodeCache.get(q)
-  if (cached) return cached
-
-  try {
-    const key = process.env.NEXT_PUBLIC_GOOGLE_MAPS_KEY ?? ""
-    const res = await fetch(
-      `https://maps.googleapis.com/maps/api/geocode/json?address=${encodeURIComponent(q)}&key=${key}`
-    )
-    if (res.ok) {
-      const data = await res.json()
-      const loc = data.results?.[0]?.geometry?.location
-      if (loc) {
-        const coords: LatLng = { lat: loc.lat, lng: loc.lng }
-        geocodeCache.set(q, coords)
-        return coords
-      }
-    }
-  } catch { /* fall through to Nominatim */ }
-
-  try {
-    const nRes = await fetch(
-      `https://nominatim.openstreetmap.org/search?format=jsonv2&limit=1&q=${encodeURIComponent(q)}`,
-      { headers: { Accept: "application/json", "User-Agent": "sg-delivery/1.0" } }
-    )
-    if (!nRes.ok) return null
-    const nData = await nRes.json()
-    const result = nData?.[0]
-    if (!result) return null
-    const lat = Number(result.lat)
-    const lng = Number(result.lon)
-    if (Number.isNaN(lat) || Number.isNaN(lng)) return null
-    const coords: LatLng = { lat, lng }
-    geocodeCache.set(q, coords)
-    return coords
-  } catch { return null }
-}
-
-function haversineDistanceKm(a: LatLng, b: LatLng): number {
-  const toRad = (v: number) => (v * Math.PI) / 180
-  const R = 6371
-  const dLat = toRad(b.lat - a.lat)
-  const dLng = toRad(b.lng - a.lng)
-  const h =
-    Math.sin(dLat / 2) ** 2 +
-    Math.cos(toRad(a.lat)) * Math.cos(toRad(b.lat)) * Math.sin(dLng / 2) ** 2
-  return Number((R * 2 * Math.atan2(Math.sqrt(h), Math.sqrt(1 - h))).toFixed(2))
-}
 
 async function calculateDistanceKm(
   address: string
 ): Promise<{ distanceKm?: number; lat?: number; lng?: number }> {
-  const destination = await geocodeAddress(address)
+  const destination = await geocodeAddress(address, { apiKey: await getServerMapsKey() })
   if (!destination) return {}
   const distanceKm = haversineDistanceKm(getHubCoordinates(), destination)
   return { distanceKm, lat: destination.lat, lng: destination.lng }
@@ -328,19 +264,56 @@ export async function adminRemoveDuplicateOrders(): Promise<number> {
   return deleted
 }
 
-export async function adminBackfillOrderCoords(): Promise<number> {
+export type BackfillCoordsResult = {
+  updated: number
+  /** Orders that still have no coordinates because neither provider placed them. */
+  failed: number
+  /** Set when Google geocoding is misconfigured — `updated` will be near zero. */
+  geocoderError: string | null
+}
+
+export async function adminBackfillOrderCoords(): Promise<BackfillCoordsResult> {
   const snap = await adminDb.collection("orders").get()
+  const hub = getHubCoordinates()
+  const apiKey = await getServerMapsKey()
   let updated = 0
+  let failed = 0
+
   for (const d of snap.docs) {
     const data = d.data()
-    if (typeof data.lat === "number" && typeof data.lng === "number") continue
+    const hasCoords = typeof data.lat === "number" && typeof data.lng === "number"
+    const hasDistance = typeof data.distanceKm === "number" && !Number.isNaN(data.distanceKm)
+    if (hasCoords && hasDistance) continue
+
     const address = data.address as string
     if (!address?.trim()) continue
-    const coords = await geocodeAddress(address.trim())
-    if (coords) {
-      await d.ref.update({ lat: coords.lat, lng: coords.lng })
-      updated++
+
+    // Reuse stored coords when only distanceKm is missing — no API call needed.
+    const coords = hasCoords
+      ? { lat: data.lat as number, lng: data.lng as number }
+      : await geocodeAddress(address.trim(), { apiKey })
+
+    if (!coords) {
+      failed++
+      continue
     }
+
+    // Write lat/lng *and* distanceKm together so the map and the distance
+    // column can never drift apart again.
+    await d.ref.update({
+      lat: coords.lat,
+      lng: coords.lng,
+      distanceKm: haversineDistanceKm(hub, coords),
+    })
+    updated++
   }
-  return updated
+
+  const health = getGeocodeHealth()
+  return {
+    updated,
+    failed,
+    geocoderError: health.lastError
+      ? `${health.lastError.status}: ${health.lastError.message}`
+      : null,
+  }
 }

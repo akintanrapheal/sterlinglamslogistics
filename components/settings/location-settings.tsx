@@ -5,7 +5,7 @@ import { Label } from "@/components/ui/label"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Switch } from "@/components/ui/switch"
-import { Save, Loader2 } from "lucide-react"
+import { Save, Loader2, MapPin } from "lucide-react"
 import { doc, getDoc, setDoc } from "firebase/firestore"
 import { logActivity } from "@/lib/activity-client"
 import { db } from "@/lib/firebase"
@@ -37,6 +37,7 @@ export function LocationSettingsPanel() {
   const [settings, setSettings] = useState<LocationSettings>(DEFAULT)
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
+  const [geocoding, setGeocoding] = useState(false)
 
   useEffect(() => {
     async function load() {
@@ -70,6 +71,32 @@ export function LocationSettingsPanel() {
 
   function update<K extends keyof LocationSettings>(key: K, value: LocationSettings[K]) {
     setSettings((prev) => ({ ...prev, [key]: value }))
+  }
+
+  async function geocodeAddress() {
+    if (!settings.hubAddress.trim()) {
+      toast({ title: "No address", description: "Enter a hub address first.", variant: "destructive" })
+      return
+    }
+    setGeocoding(true)
+    try {
+      const { loadGoogleMaps } = await import("@/lib/google-maps")
+      await loadGoogleMaps()
+      const geocoder = new google.maps.Geocoder()
+      geocoder.geocode({ address: settings.hubAddress }, (results, status) => {
+        if (status === "OK" && results?.[0]) {
+          const loc = results[0].geometry.location
+          setSettings((prev) => ({ ...prev, hubLat: loc.lat().toFixed(6), hubLng: loc.lng().toFixed(6) }))
+          toast({ title: "Coordinates found", description: `${loc.lat().toFixed(6)}, ${loc.lng().toFixed(6)}` })
+        } else {
+          toast({ title: "Not found", description: "Could not geocode that address. Try a more specific address.", variant: "destructive" })
+        }
+        setGeocoding(false)
+      })
+    } catch {
+      toast({ title: "Error", description: "Geocoding failed. Check your Maps API key.", variant: "destructive" })
+      setGeocoding(false)
+    }
   }
 
   if (loading) {
@@ -111,12 +138,25 @@ export function LocationSettingsPanel() {
 
         <div className="space-y-2">
           <Label htmlFor="hub-address">Hub address</Label>
-          <Input
-            id="hub-address"
-            placeholder="123 Warehouse St, Lagos"
-            value={settings.hubAddress}
-            onChange={(e) => update("hubAddress", e.target.value)}
-          />
+          <div className="flex gap-2">
+            <Input
+              id="hub-address"
+              placeholder="123 Warehouse St, Lagos"
+              value={settings.hubAddress}
+              onChange={(e) => update("hubAddress", e.target.value)}
+              className="flex-1"
+            />
+            <Button
+              type="button"
+              variant="outline"
+              onClick={geocodeAddress}
+              disabled={geocoding || !settings.hubAddress.trim()}
+              className="shrink-0"
+            >
+              {geocoding ? <Loader2 className="size-4 animate-spin" /> : <MapPin className="size-4" />}
+              {geocoding ? "Looking up..." : "Look up coords"}
+            </Button>
+          </div>
         </div>
 
         <div className="grid grid-cols-2 gap-4">

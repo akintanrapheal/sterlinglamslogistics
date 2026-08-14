@@ -143,7 +143,28 @@
   }
   body {
     @apply bg-background text-foreground;
+    overscroll-behavior: none;
+  }
+  /* Prevent iOS bounce scroll at the root */
+  html {
+    overscroll-behavior: none;
   }
 }
 
+/* Remove hover styles on touch-only devices */
+@media (hover: none) and (pointer: coarse) {
+  :root {
+    --no-hover: 1;
+  }
+  a:hover,
+  button:hover {
+    opacity: 1;
+  }
+  /* Prevent sticky :hover states after tap on mobile */
+  .hover\:bg-accent:hover,
+  .hover\:bg-primary\/90:hover,
+  .hover\:bg-secondary\/80:hover {
+    background-color: inherit;
+  }
+}
 

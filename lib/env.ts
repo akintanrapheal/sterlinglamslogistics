@@ -21,6 +21,10 @@ const serverEnvSchema = z.object({
   NOTIFY_FROM_EMAIL: z.string().email().optional(),
   // WooCommerce
   WOOCOMMERCE_WEBHOOK_SECRET: z.string().min(1).optional(),
+  // Sterlin Glams store (sterlinglams.com) — shared HMAC secret for the new platform's order
+  // push (/api/external-orders) and the delivered callback we POST back to the store.
+  STORE_WEBHOOK_SECRET: z.string().min(1).optional(),
+  STORE_DELIVERED_WEBHOOK_URL: z.string().url().optional(),
   // Upstash (rate limiting)
   UPSTASH_REDIS_REST_URL: z.string().url().optional(),
   UPSTASH_REDIS_REST_TOKEN: z.string().min(1).optional(),

@@ -14,9 +14,10 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
 import { Button } from "@/components/ui/button"
-import { Download, MoreHorizontal, Printer, Trash2 } from "lucide-react"
+import { Download, MoreHorizontal, Printer, Trash2, Clock } from "lucide-react"
 import { formatCurrency } from "@/lib/data"
 import type { Order } from "@/lib/data"
+import { format } from "date-fns"
 import { formatOrderTime, formatTimeAmPm } from "@/lib/order-utils"
 import { ORDER_STATUS_LABELS } from "@/lib/constants"
 
@@ -285,6 +286,42 @@ export function OrderDetailDialog({ order, onClose, onDelete, getDriverDisplayNa
                 </div>
               )}
             </div>
+
+            {/* ── Order timeline ── */}
+            {(() => {
+              const events: { label: string; ts: unknown }[] = [
+                { label: "Order placed", ts: order.createdAt },
+                { label: "Driver assigned", ts: order.startedAt },
+                { label: "Picked up", ts: order.pickedUpAt },
+                { label: "In transit", ts: order.inTransitAt },
+                { label: "Delivered", ts: order.deliveredAt },
+              ].filter((e) => {
+                if (!e.ts) return false
+                const ms = timestampToMs(e.ts)
+                return ms !== null && ms > 0
+              })
+              if (events.length === 0) return null
+              return (
+                <div className="rounded-md border p-3">
+                  <div className="mb-2 flex items-center gap-1.5">
+                    <Clock className="size-4 text-muted-foreground" />
+                    <p className="text-sm font-semibold">Order Timeline</p>
+                  </div>
+                  <ol className="relative ml-2 space-y-3 border-l border-border">
+                    {events.map((evt, i) => {
+                      const ms = timestampToMs(evt.ts)
+                      return (
+                        <li key={i} className="ml-4">
+                          <span className="absolute -left-1.5 mt-0.5 flex size-3 items-center justify-center rounded-full bg-primary ring-2 ring-background" />
+                          <p className="text-xs font-medium text-foreground">{evt.label}</p>
+                          <p className="text-[11px] text-muted-foreground">{ms ? format(new Date(ms), "d MMM yyyy, HH:mm") : ""}</p>
+                        </li>
+                      )
+                    })}
+                  </ol>
+                </div>
+              )
+            })()}
           </>
         )}
       </DialogContent>

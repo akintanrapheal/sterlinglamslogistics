@@ -4,6 +4,7 @@ import { useEffect, useState } from "react"
 import { Label } from "@/components/ui/label"
 import { Button } from "@/components/ui/button"
 import { Switch } from "@/components/ui/switch"
+import { Input } from "@/components/ui/input"
 import {
   Select,
   SelectContent,
@@ -20,21 +21,29 @@ import { toast } from "@/hooks/use-toast"
 interface NotificationSettings {
   etaEmail: boolean
   etaWhatsapp: boolean
+  etaSms: boolean
   etaTrigger: string
   allowEditDeliveryInstructions: boolean
   proactiveDelayAlerts: boolean
+  delayAlertThresholdMinutes: number
   deliveryReceiptEmail: boolean
   deliveryFeedbackEmail: boolean
+  failedDeliveryEnabled: boolean
+  failedDeliveryMessage: string
 }
 
 const DEFAULT: NotificationSettings = {
   etaEmail: true,
   etaWhatsapp: true,
+  etaSms: false,
   etaTrigger: "out_for_delivery",
   allowEditDeliveryInstructions: false,
   proactiveDelayAlerts: false,
+  delayAlertThresholdMinutes: 30,
   deliveryReceiptEmail: true,
   deliveryFeedbackEmail: true,
+  failedDeliveryEnabled: false,
+  failedDeliveryMessage: "Hi {customerName}, we were unable to deliver your order #{orderNumber}. Please contact us to reschedule.",
 }
 
 const SETTINGS_DOC = "customerNotification"
@@ -110,6 +119,11 @@ export function NotificationSettingsPanel() {
           <Switch id="eta-whatsapp" checked={notif.etaWhatsapp} onCheckedChange={(v) => update("etaWhatsapp", v)} />
         </div>
 
+        <div className="flex items-center justify-between">
+          <Label htmlFor="eta-sms" className="font-normal">SMS</Label>
+          <Switch id="eta-sms" checked={notif.etaSms} onCheckedChange={(v) => update("etaSms", v)} />
+        </div>
+
         <div className="space-y-2">
           <Label>Send tracking notification as soon as</Label>
           <Select value={notif.etaTrigger} onValueChange={(v) => update("etaTrigger", v)}>
@@ -155,6 +169,20 @@ export function NotificationSettingsPanel() {
             </p>
           </div>
         </div>
+        {notif.proactiveDelayAlerts && (
+          <div className="space-y-2 pl-4 border-l-2 border-muted">
+            <Label htmlFor="delay-threshold">Alert when order is past ETA by (minutes)</Label>
+            <Input
+              id="delay-threshold"
+              type="number"
+              min={5}
+              max={240}
+              value={notif.delayAlertThresholdMinutes}
+              onChange={(e) => update("delayAlertThresholdMinutes", Number(e.target.value))}
+              className="w-28"
+            />
+          </div>
+        )}
       </section>
 
       <hr className="border-border" />
@@ -187,6 +215,34 @@ export function NotificationSettingsPanel() {
           <Label htmlFor="feedback-email" className="font-normal">Email</Label>
           <Switch id="feedback-email" checked={notif.deliveryFeedbackEmail} onCheckedChange={(v) => update("deliveryFeedbackEmail", v)} />
         </div>
+      </section>
+
+      <hr className="border-border" />
+
+      {/* Failed delivery notification */}
+      <section className="space-y-4">
+        <div>
+          <h3 className="text-base font-semibold">Failed delivery notification</h3>
+          <p className="text-sm text-muted-foreground">
+            Send a message to the customer when their order is marked as Failed, with a reschedule prompt.
+          </p>
+        </div>
+        <div className="flex items-center gap-3">
+          <Switch id="failed-delivery" checked={notif.failedDeliveryEnabled} onCheckedChange={(v) => update("failedDeliveryEnabled", v)} />
+          <Label htmlFor="failed-delivery" className="cursor-pointer font-normal">Enable failed delivery notification</Label>
+        </div>
+        {notif.failedDeliveryEnabled && (
+          <div className="space-y-2 pl-4 border-l-2 border-muted">
+            <Label htmlFor="failed-msg">Message (variables: {`{customerName} {orderNumber}`})</Label>
+            <textarea
+              id="failed-msg"
+              rows={3}
+              value={notif.failedDeliveryMessage}
+              onChange={(e) => update("failedDeliveryMessage", e.target.value)}
+              className="w-full rounded-md border bg-background px-3 py-2 text-sm outline-none ring-offset-background placeholder:text-muted-foreground focus-visible:ring-2 focus-visible:ring-ring resize-none"
+            />
+          </div>
+        )}
       </section>
 
       <div className="pt-4">

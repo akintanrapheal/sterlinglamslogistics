@@ -41,6 +41,15 @@ export function AppSidebar() {
   const profileRef = useRef<HTMLDivElement>(null)
   const { user, role, logout } = useAuth()
   const { muted, toggleMute } = useOrderAlert()
+  const [unreadReviews, setUnreadReviews] = useState(false)
+
+  useEffect(() => {
+    try {
+      const lastVisit = parseInt(localStorage.getItem("lastReviewsVisit") ?? "0")
+      const latest = parseInt(localStorage.getItem("latestReviewTs") ?? "0")
+      setUnreadReviews(latest > lastVisit)
+    } catch { setUnreadReviews(false) }
+  }, [pathname])
 
   // Filter nav items to only those the current role can access
   const visibleNav = navItems.filter((item) => canAccessRoute(role, item.href))
@@ -64,7 +73,7 @@ export function AppSidebar() {
         {/* Mobile menu button */}
         <button
           onClick={() => setMobileOpen(!mobileOpen)}
-          className="lg:hidden"
+          className="lg:hidden p-2.5 -ml-2.5 rounded-md hover:bg-accent transition-colors"
           aria-label="Toggle navigation"
         >
           {mobileOpen ? <X className="size-5" /> : <Menu className="size-5" />}
@@ -99,7 +108,12 @@ export function AppSidebar() {
                     : "text-muted-foreground hover:text-foreground"
                 )}
               >
-                {item.label}
+                <span className="relative">
+                  {item.label}
+                  {item.href === "/reviews" && unreadReviews && (
+                    <span className="absolute -right-2 -top-1 size-2 rounded-full bg-orange-500" />
+                  )}
+                </span>
               </Link>
             )
           })}
@@ -110,7 +124,7 @@ export function AppSidebar() {
           <button
             onClick={toggleMute}
             className={cn(
-              "rounded-md p-2 transition-colors",
+              "rounded-md p-3 transition-colors",
               muted
                 ? "text-muted-foreground hover:text-foreground"
                 : "text-foreground hover:text-primary"
@@ -121,7 +135,7 @@ export function AppSidebar() {
             {muted ? <BellOff className="size-4" /> : <Bell className="size-4" />}
           </button>
           <button
-            className="rounded-md p-2 text-muted-foreground hover:text-foreground transition-colors"
+            className="rounded-md p-3 text-muted-foreground hover:text-foreground transition-colors"
             aria-label="Help"
             title="Help"
           >
@@ -132,7 +146,7 @@ export function AppSidebar() {
           <div className="relative" ref={profileRef}>
             <button
               onClick={() => setProfileOpen((v) => !v)}
-              className="flex size-8 items-center justify-center rounded-full bg-emerald-500 text-xs font-semibold text-white"
+              className="flex size-11 items-center justify-center rounded-full bg-emerald-500 text-xs font-semibold text-white"
               aria-label="Account menu"
             >
               {user?.email ? user.email[0].toUpperCase() : "A"}

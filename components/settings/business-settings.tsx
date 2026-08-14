@@ -6,11 +6,31 @@ import { Label } from "@/components/ui/label"
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
 import { Save, Loader2, Pencil, Store, Package } from "lucide-react"
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
 import { doc, getDoc, setDoc } from "firebase/firestore"
 import { logActivity } from "@/lib/activity-client"
 import { db } from "@/lib/firebase"
 import { toast } from "@/hooks/use-toast"
 import Image from "next/image"
+
+const DAYS = [
+  { key: "monday", label: "Mon" },
+  { key: "tuesday", label: "Tue" },
+  { key: "wednesday", label: "Wed" },
+  { key: "thursday", label: "Thu" },
+  { key: "friday", label: "Fri" },
+  { key: "saturday", label: "Sat" },
+  { key: "sunday", label: "Sun" },
+] as const
+
+type DayKey = typeof DAYS[number]["key"]
+interface DayHours { open: boolean; from: string; to: string }
 
 interface BusinessSettings {
   businessName: string
@@ -18,7 +38,18 @@ interface BusinessSettings {
   businessType: "merchant" | "delivery_company"
   merchantPhone: string
   merchantAddress: string
+  timezone: string
+  currency: string
+  currencySymbol: string
+  whatsappLink: string
+  instagramLink: string
+  websiteUrl: string
+  operatingHours: Record<DayKey, DayHours>
 }
+
+const DEFAULT_HOURS = Object.fromEntries(
+  DAYS.map(({ key }) => [key, { open: key !== "sunday", from: "09:00", to: "18:00" }])
+) as Record<DayKey, DayHours>
 
 const DEFAULT_BUSINESS_SETTINGS: BusinessSettings = {
   businessName: "Sterlinglams",
@@ -26,6 +57,13 @@ const DEFAULT_BUSINESS_SETTINGS: BusinessSettings = {
   businessType: "merchant",
   merchantPhone: "+234 9160009893",
   merchantAddress: "Sterlinglams – Ikota Ajah Lagos",
+  timezone: "Africa/Lagos",
+  currency: "NGN",
+  currencySymbol: "₦",
+  whatsappLink: "",
+  instagramLink: "",
+  websiteUrl: "",
+  operatingHours: DEFAULT_HOURS,
 }
 
 const BUSINESS_SETTINGS_DOC = "businessSettings"
@@ -210,6 +248,126 @@ export function BusinessSettingsPanel() {
             className="max-w-sm"
             placeholder="Your store address"
           />
+        </div>
+      </section>
+
+      <hr className="border-border" />
+
+      {/* Regional settings */}
+      <section className="space-y-4">
+        <div>
+          <h3 className="text-base font-semibold">Regional settings</h3>
+          <p className="text-sm text-muted-foreground">Timezone and currency used across the platform</p>
+        </div>
+
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+          <div className="space-y-2">
+            <Label htmlFor="timezone">Timezone</Label>
+            <Select value={biz.timezone} onValueChange={(v) => update("timezone", v)}>
+              <SelectTrigger id="timezone" className="w-full">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="Africa/Lagos">Africa/Lagos (WAT)</SelectItem>
+                <SelectItem value="Africa/Accra">Africa/Accra (GMT)</SelectItem>
+                <SelectItem value="Africa/Nairobi">Africa/Nairobi (EAT)</SelectItem>
+                <SelectItem value="Europe/London">Europe/London (GMT/BST)</SelectItem>
+                <SelectItem value="America/New_York">America/New_York (EST)</SelectItem>
+                <SelectItem value="UTC">UTC</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+
+          <div className="space-y-2">
+            <Label htmlFor="currency">Currency</Label>
+            <Select value={biz.currency} onValueChange={(v) => {
+              const symbols: Record<string, string> = { NGN: "₦", USD: "$", GBP: "£", EUR: "€", KES: "KSh", GHS: "₵" }
+              update("currency", v)
+              update("currencySymbol", symbols[v] ?? v)
+            }}>
+              <SelectTrigger id="currency" className="w-full">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="NGN">NGN — Nigerian Naira (₦)</SelectItem>
+                <SelectItem value="USD">USD — US Dollar ($)</SelectItem>
+                <SelectItem value="GBP">GBP — British Pound (£)</SelectItem>
+                <SelectItem value="EUR">EUR — Euro (€)</SelectItem>
+                <SelectItem value="KES">KES — Kenyan Shilling (KSh)</SelectItem>
+                <SelectItem value="GHS">GHS — Ghanaian Cedi (₵)</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+        </div>
+      </section>
+
+      <hr className="border-border" />
+
+      {/* Social links */}
+      <section className="space-y-4">
+        <div>
+          <h3 className="text-base font-semibold">Social &amp; contact links</h3>
+          <p className="text-sm text-muted-foreground">Shown on the customer-facing tracking page</p>
+        </div>
+        <div className="space-y-3">
+          <div className="space-y-1">
+            <Label htmlFor="whatsapp">WhatsApp Business link</Label>
+            <Input id="whatsapp" placeholder="https://wa.me/2349160009893" value={biz.whatsappLink} onChange={(e) => update("whatsappLink", e.target.value)} />
+          </div>
+          <div className="space-y-1">
+            <Label htmlFor="instagram">Instagram URL</Label>
+            <Input id="instagram" placeholder="https://instagram.com/yourhandle" value={biz.instagramLink} onChange={(e) => update("instagramLink", e.target.value)} />
+          </div>
+          <div className="space-y-1">
+            <Label htmlFor="website">Website URL</Label>
+            <Input id="website" placeholder="https://yourbusiness.com" value={biz.websiteUrl} onChange={(e) => update("websiteUrl", e.target.value)} />
+          </div>
+        </div>
+      </section>
+
+      <hr className="border-border" />
+
+      {/* Operating hours */}
+      <section className="space-y-4">
+        <div>
+          <h3 className="text-base font-semibold">Operating hours</h3>
+          <p className="text-sm text-muted-foreground">Days and hours your business accepts orders</p>
+        </div>
+        <div className="space-y-3">
+          {DAYS.map(({ key, label }) => {
+            const hours = biz.operatingHours[key] ?? { open: false, from: "09:00", to: "18:00" }
+            return (
+              <div key={key} className="flex items-center gap-3">
+                <span className="w-9 shrink-0 text-sm font-medium text-muted-foreground">{label}</span>
+                <input
+                  type="checkbox"
+                  id={`day-${key}`}
+                  checked={hours.open}
+                  onChange={(e) => update("operatingHours", { ...biz.operatingHours, [key]: { ...hours, open: e.target.checked } })}
+                  className="h-4 w-4 rounded border-gray-300"
+                />
+                {hours.open ? (
+                  <div className="flex flex-1 items-center gap-2">
+                    <input
+                      type="time"
+                      value={hours.from}
+                      onChange={(e) => update("operatingHours", { ...biz.operatingHours, [key]: { ...hours, from: e.target.value } })}
+                      className="h-8 rounded-md border bg-background px-2 text-sm outline-none focus:ring-1 focus:ring-ring"
+                    />
+                    <span className="text-sm text-muted-foreground">–</span>
+                    <input
+                      type="time"
+                      value={hours.to}
+                      onChange={(e) => update("operatingHours", { ...biz.operatingHours, [key]: { ...hours, to: e.target.value } })}
+                      className="h-8 rounded-md border bg-background px-2 text-sm outline-none focus:ring-1 focus:ring-ring"
+                    />
+                  </div>
+                ) : (
+                  <span className="text-sm text-muted-foreground">Closed</span>
+                )}
+              </div>
+            )
+          })}
         </div>
       </section>
 

@@ -114,6 +114,8 @@ export function DriverProvider({ children }: { children: ReactNode }) {
     }
     if (watchIdRef.current !== null) return
 
+    const sessionId = session.id
+
     // Get an immediate position fix so the map shows the driver right away
     navigator.geolocation.getCurrentPosition(
       async (pos) => {
@@ -123,21 +125,12 @@ export function DriverProvider({ children }: { children: ReactNode }) {
         try {
           await driverFetch("/api/driver/location", {
             method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-            },
-            body: JSON.stringify({
-              driverId: session.id,
-              lat: coords.lat,
-              lng: coords.lng,
-            }),
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ driverId: sessionId, lat: coords.lat, lng: coords.lng }),
           })
-        } catch {
-          // silently ignore
-        }
+        } catch { /* silently ignore */ }
       },
       (err) => {
-        console.warn("Initial GPS fix failed:", err.message)
         if (err.code === err.PERMISSION_DENIED) {
           toast({ title: "Location access denied", description: "Go to your device Settings → App Permissions → Location and enable it for this app so customers can track your delivery.", variant: "destructive" })
         }
@@ -151,7 +144,7 @@ export function DriverProvider({ children }: { children: ReactNode }) {
         setLiveGps(coords)
         setGpsError(false)
 
-        // Throttle writes to Firestore — at most once every 5 seconds
+        // Throttle writes — at most once every 5 seconds
         const now = Date.now()
         if (now - lastGpsWriteRef.current < 5000) return
         lastGpsWriteRef.current = now
@@ -159,11 +152,9 @@ export function DriverProvider({ children }: { children: ReactNode }) {
           await driverFetch("/api/driver/location", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ driverId: session.id, lat: coords.lat, lng: coords.lng }),
+            body: JSON.stringify({ driverId: sessionId, lat: coords.lat, lng: coords.lng }),
           })
-        } catch {
-          // silently ignore — location update is best-effort
-        }
+        } catch { /* best-effort */ }
       },
       (err) => {
         setGpsError(true)

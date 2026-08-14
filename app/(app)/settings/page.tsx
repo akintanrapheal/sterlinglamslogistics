@@ -2,7 +2,7 @@
 
 import { useState } from "react"
 import { cn } from "@/lib/utils"
-import { Building2, Paintbrush, Settings2, Truck, Users, Bell, Route, MapPin } from "lucide-react"
+import { Building2, Paintbrush, Settings2, Truck, Users, Bell, Route, MapPin, Plug } from "lucide-react"
 import { BusinessSettingsPanel } from "@/components/settings/business-settings"
 import { NotificationSettingsPanel } from "@/components/settings/notification-settings"
 import { DriverSettingsPanel } from "@/components/settings/driver-settings"
@@ -11,6 +11,7 @@ import { RouteSettingsPanel } from "@/components/settings/route-settings"
 import { UsersSettingsPanel } from "@/components/settings/users-settings"
 import { LocationSettingsPanel } from "@/components/settings/location-settings"
 import { BrandSettingsPanel } from "@/components/settings/brand-settings"
+import { IntegrationsSettingsPanel } from "@/components/settings/integrations-settings"
 import { useAuth } from "@/components/auth-provider"
 import { canAccessSettingsTab } from "@/lib/roles"
 
@@ -23,6 +24,7 @@ const settingsNav = [
   { key: "route",        label: "Route planning",          icon: Route },
   { key: "users",        label: "Users",                   icon: Users },
   { key: "location",     label: "Location",                icon: MapPin },
+  { key: "integrations", label: "Integrations",            icon: Plug },
 ]
 
 export default function SettingsPage() {
@@ -77,6 +79,7 @@ export default function SettingsPage() {
           {activeTab === "users"        && <UsersSettingsPanel />}
           {activeTab === "location"     && <LocationSettingsPanel />}
           {activeTab === "brand"        && <BrandSettingsPanel />}
+          {activeTab === "integrations" && <IntegrationsSettingsPanel />}
         </div>
       </div>
     </div>
