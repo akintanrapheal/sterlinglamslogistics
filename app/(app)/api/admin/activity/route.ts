@@ -16,7 +16,12 @@ const CLIENT_LOGGABLE_ACTIONS: AuditAction[] = [
   "order.deleted",
   "order.assigned",
   "order.status_changed",
+  "settings.updated",
 ]
+
+// settings.updated additionally requires owner/admin (the settings UI is
+// already gated to managers; this enforces it at the API too).
+const MANAGER_ONLY_ACTIONS: AuditAction[] = ["settings.updated"]
 
 /** Normalise a Firestore Timestamp / Date / ISO string to an ISO string. */
 function toIso(value: unknown): string | null {
@@ -97,10 +102,16 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "Unsupported action" }, { status: 400 })
   }
 
+  if (MANAGER_ONLY_ACTIONS.includes(body.action)) {
+    const manager = await verifyManager(req)
+    if (!manager) return NextResponse.json({ error: "Forbidden" }, { status: 403 })
+  }
+
   await audit({
     action: body.action,
     actor: admin.email ?? admin.uid,
-    resourceType: "order",
+    // Resource type is implied by the action prefix (order.* / settings.*).
+    resourceType: body.action.startsWith("settings.") ? "settings" : "order",
     resourceId: body.resourceId,
     details: body.details,
   })

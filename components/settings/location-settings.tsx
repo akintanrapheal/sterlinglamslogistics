@@ -7,6 +7,7 @@ import { Input } from "@/components/ui/input"
 import { Switch } from "@/components/ui/switch"
 import { Save, Loader2, MapPin } from "lucide-react"
 import { doc, getDoc, setDoc } from "firebase/firestore"
+import { logActivity } from "@/lib/activity-client"
 import { db } from "@/lib/firebase"
 import { toast } from "@/hooks/use-toast"
 
@@ -58,6 +59,7 @@ export function LocationSettingsPanel() {
     setSaving(true)
     try {
       await setDoc(doc(db, "settings", SETTINGS_DOC), settings)
+      logActivity({ action: "settings.updated", details: { section: "location" } })
       toast({ title: "Saved", description: "Location settings updated." })
     } catch (err) {
       console.error("Failed to save location settings:", err)

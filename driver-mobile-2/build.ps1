@@ -30,7 +30,15 @@
 
 param(
     [switch]$Build,
-    [string]$ApiBase = "https://sterlinglamslogistics.com"
+    # Default to the Vercel origin rather than the apex domain. Drivers hit
+    # intermittent 403s on the apex, which sits behind Cloudflare; the Vercel
+    # origin does not, and both answer the API correctly otherwise. So the 403
+    # comes from that edge. Hitting Vercel directly skips it. See README.md
+    # ("Why the default is the Vercel origin") for what is and isn't confirmed.
+    #
+    # To go back to the Cloudflare-fronted apex:
+    #   .\build.ps1 -ApiBase "https://sterlinglamslogistics.com"
+    [string]$ApiBase = "https://sterlinglamslogistics.vercel.app"
 )
 
 $ErrorActionPreference = "Stop"

@@ -95,7 +95,7 @@ function describeActivity(e: ActivityEntry): string {
     case "driver.status_changed":
       return `Changed a driver's status`
     case "settings.updated":
-      return `Updated settings`
+      return d.section ? `Updated ${d.section} settings` : `Updated settings`
     case "admin.login":
       return `Signed in`
     case "admin.clean_orders":

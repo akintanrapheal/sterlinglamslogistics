@@ -92,6 +92,40 @@ time, and `lib/driver-client.ts`'s `driverFetch` prepends that base to
 any path-relative request. If you ever need to point at a staging server,
 pass `-ApiBase "https://staging.example.com"` to `build.ps1`.
 
+### Why the default is the Vercel origin
+
+`-ApiBase` defaults to `https://sterlinglamslogistics.vercel.app`, **not**
+the apex `https://sterlinglamslogistics.com`, because drivers hit
+intermittent `403`s on the apex.
+
+What is established: the apex resolves to Cloudflare (`Server: cloudflare`),
+the Vercel origin does not, and the app itself is not the source — both
+origins answer a token-less `/api/driver/profile` with a correct `401` and
+a correct CORS preflight. So the `403` is injected by an edge that only
+exists in front of the apex.
+
+What is *not* confirmed: the exact Cloudflare rule. The likely trigger is
+the custom User-Agent — the WebView appends `SterlinDriverApp2` (see
+`capacitor.config.ts`) — flagged by bot-fight/WAF rules, which would explain
+a per-request, "sometimes" failure. This has not been reproduced on demand;
+to confirm it, check the Cloudflare dashboard's Security Events for blocked
+requests to `/api/driver/*` and read the rule that matched.
+
+Talking to Vercel directly skips that edge. The trade-off is that you also
+skip Cloudflare's caching and DDoS protection for driver API traffic — an
+acceptable deal for a handful of authenticated drivers, but reconsider it
+if the driver fleet grows a lot.
+
+The cleaner long-term fix is a Cloudflare WAF skip rule for the driver
+app's User-Agent (or its `X-Driver-Token` header), which would let the
+apex work and keep the protection. Once that rule exists, flip the default
+back with `-ApiBase "https://sterlinglamslogistics.com"`. Both origins are
+already in `allowNavigation`, so no other change is needed.
+
+Note this only affects the **bundled APK**. The web app at the apex is
+same-origin and leaves `NEXT_PUBLIC_API_BASE_URL` empty, so it is
+unaffected either way.
+
 ## Rolling back
 
 If something behaves worse than the original driver-mobile, just install

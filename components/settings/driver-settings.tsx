@@ -14,6 +14,7 @@ import {
 } from "@/components/ui/select"
 import { Save, Loader2 } from "lucide-react"
 import { doc, getDoc, setDoc } from "firebase/firestore"
+import { logActivity } from "@/lib/activity-client"
 import { db } from "@/lib/firebase"
 import { toast } from "@/hooks/use-toast"
 
@@ -90,6 +91,7 @@ export function DriverSettingsPanel() {
     setSaving(true)
     try {
       await setDoc(doc(db, "settings", DRIVER_SETTINGS_DOC), driver)
+      logActivity({ action: "settings.updated", details: { section: "driver" } })
       toast({ title: "Saved", description: "Driver settings updated." })
     } catch (err) {
       console.error("Failed to save driver settings:", err)

@@ -51,8 +51,16 @@ export default function DeliveryCompletionPage() {
   const [signerName, setSignerName] = useState("")
   const [photoData, setPhotoData] = useState<string | null>(null)
   const [signatureData, setSignatureData] = useState<string | null>(null)
-  const [isDrawing, setIsDrawing] = useState(false)
   const [showSignaturePad, setShowSignaturePad] = useState(false)
+  // Drawing state lives in refs, not React state: pointermove fires far faster
+  // than React can re-render, and a stale `isDrawing` drops the first strokes.
+  const drawingRef = useRef(false)
+  const lastPointRef = useRef<{ x: number; y: number } | null>(null)
+  const sigWrapRef = useRef<HTMLDivElement>(null)
+  const sigShellRef = useRef<HTMLDivElement>(null)
+  // Mirrored into state only so the Save button can enable/disable.
+  const hasStrokeRef = useRef(false)
+  const [hasStroke, setHasStroke] = useState(false)
   const [showCamera, setShowCamera] = useState(false)
   const videoRef = useRef<HTMLVideoElement>(null)
   const streamRef = useRef<MediaStream | null>(null)
@@ -76,51 +84,191 @@ export default function DeliveryCompletionPage() {
 
   // ── Signature drawing ────────────────────────────────────────────────────────
 
-  function startDraw(e: React.MouseEvent | React.TouchEvent) {
-    setIsDrawing(true)
-    const canvas = canvasRef.current
-    if (!canvas) return
-    const ctx = canvas.getContext("2d")
-    if (!ctx) return
-    const rect = canvas.getBoundingClientRect()
-    const x = "touches" in e ? e.touches[0].clientX - rect.left : e.clientX - rect.left
-    const y = "touches" in e ? e.touches[0].clientY - rect.top : e.clientY - rect.top
-    ctx.beginPath()
-    ctx.moveTo(x, y)
-  }
+  const STROKE_WIDTH = 2.6
+  const STROKE_COLOR = "#111827"
 
-  function draw(e: React.MouseEvent | React.TouchEvent) {
-    if (!isDrawing) return
-    const canvas = canvasRef.current
-    if (!canvas) return
-    const ctx = canvas.getContext("2d")
-    if (!ctx) return
-    const rect = canvas.getBoundingClientRect()
-    const x = "touches" in e ? e.touches[0].clientX - rect.left : e.clientX - rect.left
-    const y = "touches" in e ? e.touches[0].clientY - rect.top : e.clientY - rect.top
-    ctx.lineWidth = 2
+  /** Apply stroke style to a fresh context (state is lost on every resize). */
+  function styleCtx(ctx: CanvasRenderingContext2D) {
+    ctx.lineWidth = STROKE_WIDTH
     ctx.lineCap = "round"
-    ctx.strokeStyle = "#000"
-    ctx.lineTo(x, y)
-    ctx.stroke()
+    ctx.lineJoin = "round"
+    ctx.strokeStyle = STROKE_COLOR
+    ctx.fillStyle = STROKE_COLOR
   }
 
-  function endDraw() { setIsDrawing(false) }
+  /**
+   * Size the canvas bitmap to its real on-screen box times devicePixelRatio.
+   *
+   * The pad previously hard-coded width={350} height={200} while CSS stretched
+   * it to the container width, so canvas coordinates and getBoundingClientRect
+   * coordinates disagreed — strokes drifted from the fingertip and the result
+   * was upscaled and blurry. Sizing the bitmap to the box keeps 1 canvas unit
+   * == 1 CSS px, so the offsets below need no scale factor.
+   *
+   * Any existing drawing is re-drawn afterwards, so rotating the device or
+   * entering fullscreen doesn't wipe a half-finished signature.
+   */
+  function resizeSignatureCanvas() {
+    const canvas = canvasRef.current
+    const wrap = sigWrapRef.current
+    if (!canvas || !wrap) return
+    const { width, height } = wrap.getBoundingClientRect()
+    if (width < 1 || height < 1) return
+    const dpr = Math.min(window.devicePixelRatio || 1, 3)
+    const nextW = Math.round(width * dpr)
+    const nextH = Math.round(height * dpr)
+    if (canvas.width === nextW && canvas.height === nextH) return
+
+    // Snapshot before resizing — setting width/height clears the bitmap.
+    const previous = hasStrokeRef.current ? canvas.toDataURL("image/png") : null
+    canvas.width = nextW
+    canvas.height = nextH
+    canvas.style.width = `${width}px`
+    canvas.style.height = `${height}px`
+    const ctx = canvas.getContext("2d")
+    if (!ctx) return
+    ctx.scale(dpr, dpr)
+    styleCtx(ctx)
+    if (previous) {
+      const img = new Image()
+      img.onload = () => ctx.drawImage(img, 0, 0, width, height)
+      img.src = previous
+    }
+  }
+
+  // Size the canvas once the pad is on screen, and again on rotate/resize.
+  useEffect(() => {
+    if (!showSignaturePad) return
+    // Two frames: one for the modal to mount, one for layout to settle after
+    // the fullscreen transition, which changes the box underneath us.
+    const raf = requestAnimationFrame(() => requestAnimationFrame(resizeSignatureCanvas))
+    window.addEventListener("resize", resizeSignatureCanvas)
+    window.addEventListener("orientationchange", resizeSignatureCanvas)
+    return () => {
+      cancelAnimationFrame(raf)
+      window.removeEventListener("resize", resizeSignatureCanvas)
+      window.removeEventListener("orientationchange", resizeSignatureCanvas)
+    }
+  }, [showSignaturePad])
+
+  function pointFrom(e: React.PointerEvent<HTMLCanvasElement>) {
+    const rect = e.currentTarget.getBoundingClientRect()
+    return { x: e.clientX - rect.left, y: e.clientY - rect.top }
+  }
+
+  function startDraw(e: React.PointerEvent<HTMLCanvasElement>) {
+    e.preventDefault()
+    const canvas = canvasRef.current
+    const ctx = canvas?.getContext("2d")
+    if (!canvas || !ctx) return
+    // Capture keeps strokes alive if the finger slides past the canvas edge.
+    try { e.currentTarget.setPointerCapture(e.pointerId) } catch { /* not fatal */ }
+    drawingRef.current = true
+    const p = pointFrom(e)
+    lastPointRef.current = p
+
+    // A tap with no movement is a legitimate signature mark (dotting an "i",
+    // a full stop). The old code only did beginPath/moveTo here and stroked
+    // solely on move, so a plain tap left nothing behind. Lay down a dot.
+    styleCtx(ctx)
+    ctx.beginPath()
+    ctx.arc(p.x, p.y, STROKE_WIDTH / 2, 0, Math.PI * 2)
+    ctx.fill()
+
+    if (!hasStrokeRef.current) {
+      hasStrokeRef.current = true
+      setHasStroke(true)
+    }
+  }
+
+  function draw(e: React.PointerEvent<HTMLCanvasElement>) {
+    if (!drawingRef.current) return
+    e.preventDefault()
+    const ctx = canvasRef.current?.getContext("2d")
+    const last = lastPointRef.current
+    if (!ctx || !last) return
+    const p = pointFrom(e)
+    // Quadratic through the midpoint smooths the polyline that raw pointer
+    // samples produce, so signatures look written rather than faceted.
+    const mid = { x: (last.x + p.x) / 2, y: (last.y + p.y) / 2 }
+    ctx.beginPath()
+    ctx.moveTo(last.x, last.y)
+    ctx.quadraticCurveTo(last.x, last.y, mid.x, mid.y)
+    ctx.stroke()
+    lastPointRef.current = p
+  }
+
+  function endDraw(e?: React.PointerEvent<HTMLCanvasElement>) {
+    if (e) {
+      try { e.currentTarget.releasePointerCapture(e.pointerId) } catch { /* already gone */ }
+    }
+    drawingRef.current = false
+    lastPointRef.current = null
+  }
 
   function clearSignature() {
     const canvas = canvasRef.current
-    if (!canvas) return
-    canvas.getContext("2d")?.clearRect(0, 0, canvas.width, canvas.height)
+    if (canvas) {
+      const ctx = canvas.getContext("2d")
+      // Reset in device pixels, ignoring the DPR transform on the context.
+      ctx?.save()
+      ctx?.setTransform(1, 0, 0, 1, 0, 0)
+      ctx?.clearRect(0, 0, canvas.width, canvas.height)
+      ctx?.restore()
+    }
+    hasStrokeRef.current = false
+    setHasStroke(false)
     setSignatureData(null)
   }
 
   function saveSignature() {
     const canvas = canvasRef.current
-    if (!canvas) return
+    if (!canvas || !hasStrokeRef.current) return
     setSignatureData(canvas.toDataURL("image/png"))
-    setShowSignaturePad(false)
+    closeSignaturePad()
+    hapticSuccess()
     toast({ title: "Signature captured" })
   }
+
+  /**
+   * Open the pad and try to give it the whole screen. Both calls are
+   * best-effort: the Fullscreen API rejects unless it's driven by a user
+   * gesture (it is, here) and orientation.lock is unsupported on desktop and
+   * on iOS Safari. A rejection just means the customer signs in the normal
+   * modal, so nothing is gated on either promise.
+   */
+  async function openSignaturePad() {
+    hapticTap()
+    setShowSignaturePad(true)
+    try {
+      // documentElement, not sigShellRef — the pad hasn't rendered yet at this
+      // point, so the ref is still null. The pad is `fixed inset-0` anyway, so
+      // fullscreening the document fills the screen with it either way.
+      if (!document.fullscreenElement) await document.documentElement.requestFullscreen?.()
+    } catch { /* stay windowed */ }
+    try {
+      await (screen.orientation as ScreenOrientation & {
+        lock?: (o: string) => Promise<void>
+      })?.lock?.("landscape")
+    } catch { /* portrait is fine */ }
+  }
+
+  function closeSignaturePad() {
+    setShowSignaturePad(false)
+    try { (screen.orientation as ScreenOrientation & { unlock?: () => void })?.unlock?.() } catch { /* no-op */ }
+    if (document.fullscreenElement) void document.exitFullscreen?.().catch(() => { /* no-op */ })
+  }
+
+  // Leaving fullscreen via the hardware back button / system gesture should
+  // close the pad too, otherwise it's stranded mid-screen with no way out.
+  useEffect(() => {
+    if (!showSignaturePad) return
+    function onFsChange() {
+      if (!document.fullscreenElement) setShowSignaturePad(false)
+    }
+    document.addEventListener("fullscreenchange", onFsChange)
+    return () => document.removeEventListener("fullscreenchange", onFsChange)
+  }, [showSignaturePad])
 
   // ── Camera ───────────────────────────────────────────────────────────────────
 
@@ -307,7 +455,7 @@ export default function DeliveryCompletionPage() {
           </button>
           <button
             type="button"
-            onClick={() => setShowSignaturePad(true)}
+            onClick={openSignaturePad}
             className={`flex flex-1 items-center justify-center gap-2 rounded-full border py-3 text-sm font-medium ${
               signatureData
                 ? "border-green-600 text-green-600 hover:bg-green-50"
@@ -376,36 +524,60 @@ export default function DeliveryCompletionPage() {
 
       {/* Signature Pad Modal */}
       {showSignaturePad && (
-        <div className="fixed inset-0 z-50 flex flex-col bg-background">
-          <div className="flex items-center justify-between border-b p-4">
-            <h2 className="font-semibold">Customer Signature</h2>
-            <Button variant="ghost" size="sm" onClick={() => setShowSignaturePad(false)}>
+        <div
+          ref={sigShellRef}
+          className="fixed inset-0 z-50 flex flex-col bg-background"
+          // Keep clear of notches/gesture bars once we're truly fullscreen.
+          style={{
+            paddingTop: "env(safe-area-inset-top)",
+            paddingBottom: "env(safe-area-inset-bottom)",
+            paddingLeft: "env(safe-area-inset-left)",
+            paddingRight: "env(safe-area-inset-right)",
+          }}
+        >
+          <div className="flex shrink-0 items-center justify-between border-b px-4 py-3">
+            <div>
+              <h2 className="font-semibold leading-tight">Customer Signature</h2>
+              <p className="text-xs text-muted-foreground">
+                {order?.customerName ? `Handing to ${order.customerName}` : "Ask the customer to sign"}
+              </p>
+            </div>
+            <Button variant="ghost" size="sm" onClick={closeSignaturePad} aria-label="Close signature pad">
               <X className="h-5 w-5" />
             </Button>
           </div>
-          <p className="px-4 pt-2 text-sm text-muted-foreground">
-            Ask the customer to sign below
-          </p>
-          <div className="flex flex-1 items-center justify-center p-4">
+
+          {/* The wrapper is the measured box; the canvas fills it exactly so
+              resizeSignatureCanvas can match the bitmap to it 1:1. */}
+          <div ref={sigWrapRef} className="relative m-3 flex-1 overflow-hidden rounded-xl border-2 border-dashed bg-white">
             <canvas
               ref={canvasRef}
-              width={350}
-              height={200}
-              className="w-full rounded-lg border bg-white touch-none"
-              onMouseDown={startDraw}
-              onMouseMove={draw}
-              onMouseUp={endDraw}
-              onMouseLeave={endDraw}
-              onTouchStart={startDraw}
-              onTouchMove={draw}
-              onTouchEnd={endDraw}
+              className="absolute inset-0 h-full w-full cursor-crosshair touch-none"
+              onPointerDown={startDraw}
+              onPointerMove={draw}
+              onPointerUp={endDraw}
+              onPointerCancel={endDraw}
+              onPointerLeave={endDraw}
             />
+            {!hasStroke && (
+              // pointer-events-none so tapping the hint still starts a stroke.
+              <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center gap-2 text-muted-foreground">
+                <Pen className="h-7 w-7 opacity-40" />
+                <span className="text-sm">Sign here with your finger</span>
+              </div>
+            )}
+            {hasStroke && (
+              <div className="pointer-events-none absolute bottom-3 left-0 right-0 mx-auto h-px w-4/5 bg-muted-foreground/25" />
+            )}
           </div>
-          <div className="flex gap-3 p-4">
-            <Button variant="outline" className="flex-1" onClick={clearSignature}>
+
+          <div className="flex shrink-0 gap-3 px-4 pb-4 pt-1">
+            <Button variant="outline" className="flex-1" onClick={clearSignature} disabled={!hasStroke}>
+              <Trash2 className="mr-2 h-4 w-4" />
               Clear
             </Button>
-            <Button className="flex-1" onClick={saveSignature}>
+            <Button className="flex-1" onClick={saveSignature} disabled={!hasStroke}>
+              <CheckCircle className="mr-2 h-4 w-4" />
               Save Signature
             </Button>
           </div>
