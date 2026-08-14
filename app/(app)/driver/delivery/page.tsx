@@ -350,6 +350,12 @@ export default function DeliveryCompletionPage() {
           signatureData: signatureData ?? null,
           deliveryNotes: notes.trim(), // PendingDelivery interface uses deliveryNotes
           capturedAt: Date.now(),
+          // Keep parity with the online payload above. These were previously
+          // dropped on the offline path, losing the signer and the delivery
+          // location for any confirmation made without a connection.
+          signerName: signerName.trim() || null,
+          deliveryLat: liveGps?.lat ?? null,
+          deliveryLng: liveGps?.lng ?? null,
         })
         void hapticSuccess()
         toast({

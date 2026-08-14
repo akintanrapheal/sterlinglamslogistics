@@ -229,6 +229,11 @@ export function DriverProvider({ children }: { children: ReactNode }) {
                 ...(item.photoData ? { photoData: item.photoData } : {}),
                 ...(item.signatureData ? { signatureData: item.signatureData } : {}),
                 ...(item.deliveryNotes ? { deliveryNotes: item.deliveryNotes } : {}),
+                // Absent on entries queued before these were captured.
+                ...(item.signerName ? { signerName: item.signerName } : {}),
+                ...(typeof item.deliveryLat === "number" && typeof item.deliveryLng === "number"
+                  ? { deliveryLat: item.deliveryLat, deliveryLng: item.deliveryLng }
+                  : {}),
               }),
             })
             if (res.ok) {
