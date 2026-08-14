@@ -56,6 +56,9 @@ export default function DeliveryCompletionPage() {
   // than React can re-render, and a stale `isDrawing` drops the first strokes.
   const drawingRef = useRef(false)
   const lastPointRef = useRef<{ x: number; y: number } | null>(null)
+  // Midpoint the previous smoothed segment ended on — the next one starts
+  // there, which is what keeps the stroke unbroken.
+  const prevMidRef = useRef<{ x: number; y: number } | null>(null)
   const sigWrapRef = useRef<HTMLDivElement>(null)
   const sigShellRef = useRef<HTMLDivElement>(null)
   // Mirrored into state only so the Save button can enable/disable.
@@ -166,6 +169,8 @@ export default function DeliveryCompletionPage() {
     drawingRef.current = true
     const p = pointFrom(e)
     lastPointRef.current = p
+    // First segment curves out of the touch-down point itself.
+    prevMidRef.current = p
 
     // A tap with no movement is a legitimate signature mark (dotting an "i",
     // a full stop). The old code only did beginPath/moveTo here and stroked
@@ -185,25 +190,64 @@ export default function DeliveryCompletionPage() {
     if (!drawingRef.current) return
     e.preventDefault()
     const ctx = canvasRef.current?.getContext("2d")
-    const last = lastPointRef.current
-    if (!ctx || !last) return
-    const p = pointFrom(e)
-    // Quadratic through the midpoint smooths the polyline that raw pointer
-    // samples produce, so signatures look written rather than faceted.
-    const mid = { x: (last.x + p.x) / 2, y: (last.y + p.y) / 2 }
-    ctx.beginPath()
-    ctx.moveTo(last.x, last.y)
-    ctx.quadraticCurveTo(last.x, last.y, mid.x, mid.y)
-    ctx.stroke()
-    lastPointRef.current = p
+    if (!ctx) return
+
+    // Android batches samples between frames during a fast stroke and reports
+    // only the newest on the event. Replaying the coalesced ones keeps quick
+    // signatures curved instead of faceted; browsers without the API just
+    // yield the single event.
+    const rect = e.currentTarget.getBoundingClientRect()
+    const samples =
+      typeof e.nativeEvent.getCoalescedEvents === "function"
+        ? e.nativeEvent.getCoalescedEvents()
+        : []
+    const points = (samples.length > 0 ? samples : [e.nativeEvent]).map((s) => ({
+      x: s.clientX - rect.left,
+      y: s.clientY - rect.top,
+    }))
+
+    for (const p of points) {
+      const last = lastPointRef.current
+      const prevMid = prevMidRef.current
+      if (!last || !prevMid) break
+
+      // Midpoint smoothing: each segment runs from the previous midpoint to
+      // the current one, with the raw sample as the quadratic's control
+      // point. The curve therefore starts exactly where the last one ended,
+      // so the stroke stays continuous while still being smoothed.
+      //
+      // Drawing last -> mid instead (and then advancing last to p) leaves the
+      // mid -> p half of every segment unpainted, which is what rendered the
+      // signature as a dashed line.
+      const mid = { x: (last.x + p.x) / 2, y: (last.y + p.y) / 2 }
+      ctx.beginPath()
+      ctx.moveTo(prevMid.x, prevMid.y)
+      ctx.quadraticCurveTo(last.x, last.y, mid.x, mid.y)
+      ctx.stroke()
+
+      prevMidRef.current = mid
+      lastPointRef.current = p
+    }
   }
 
   function endDraw(e?: React.PointerEvent<HTMLCanvasElement>) {
     if (e) {
       try { e.currentTarget.releasePointerCapture(e.pointerId) } catch { /* already gone */ }
     }
+    // Smoothing always stops a half-segment short of the final sample, so
+    // without this the tail of every stroke is clipped.
+    const ctx = canvasRef.current?.getContext("2d")
+    const last = lastPointRef.current
+    const prevMid = prevMidRef.current
+    if (drawingRef.current && ctx && last && prevMid) {
+      ctx.beginPath()
+      ctx.moveTo(prevMid.x, prevMid.y)
+      ctx.lineTo(last.x, last.y)
+      ctx.stroke()
+    }
     drawingRef.current = false
     lastPointRef.current = null
+    prevMidRef.current = null
   }
 
   function clearSignature() {
@@ -563,7 +607,9 @@ export default function DeliveryCompletionPage() {
               onPointerMove={draw}
               onPointerUp={endDraw}
               onPointerCancel={endDraw}
-              onPointerLeave={endDraw}
+              // Deliberately no onPointerLeave: setPointerCapture already
+              // guarantees pointerup reaches us, and ending on leave would cut
+              // strokes short exactly when the signature runs near the edge.
             />
             {!hasStroke && (
               // pointer-events-none so tapping the hint still starts a stroke.
