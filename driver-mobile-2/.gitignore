@@ -26,3 +26,10 @@ source/components/
 source/hooks/
 source/lib/
 source/public/
+source/next-env.d.ts
+
+# Capacitor web assets. build.ps1 step 4 deletes www/ outright and copies
+# source/out/ over it, preserving only offline.html — so everything else
+# here is build output, not source.
+www/*
+!www/offline.html
