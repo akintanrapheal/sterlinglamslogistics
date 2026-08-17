@@ -32,7 +32,7 @@ export function DriverTabs({ unreadMessages = 0 }: DriverTabsProps) {
 
   return (
     <nav
-      className="fixed inset-x-0 bottom-0 z-50 border-t border-border bg-white"
+      className="fixed inset-x-0 bottom-0 z-50 border-t border-border bg-background"
       style={{ paddingBottom: "env(safe-area-inset-bottom)" }}
     >
       <div className="mx-auto grid max-w-md grid-cols-4 px-1 pb-1 pt-2">
@@ -45,12 +45,12 @@ export function DriverTabs({ unreadMessages = 0 }: DriverTabsProps) {
               href={tab.href}
               className={cn(
                 "relative flex flex-col items-center justify-center gap-0.5 rounded-lg py-1 text-[10px] font-semibold transition-colors",
-                active ? "text-green-600" : "text-muted-foreground hover:text-foreground"
+                active ? "text-green-600 dark:text-green-400" : "text-muted-foreground hover:text-foreground"
               )}
             >
               <span className="relative">
                 <tab.icon
-                  className={cn("h-6 w-6", active && "text-green-600")}
+                  className={cn("h-6 w-6", active && "text-green-600 dark:text-green-400")}
                   strokeWidth={active ? 2.5 : 2}
                 />
                 {showBadge && (

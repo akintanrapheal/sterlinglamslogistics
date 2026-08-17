@@ -53,7 +53,7 @@ export function DriverMapSkeleton() {
   return (
     <div className="relative h-screen w-full bg-muted">
       <div className="absolute inset-0 animate-pulse bg-gradient-to-b from-muted to-muted/80" />
-      <div className="absolute left-4 top-4 flex h-10 w-10 animate-pulse items-center justify-center rounded-lg bg-white/80 shadow" />
+      <div className="absolute left-4 top-4 flex h-10 w-10 animate-pulse items-center justify-center rounded-lg bg-background/80 shadow" />
     </div>
   )
 }
