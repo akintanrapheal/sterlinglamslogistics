@@ -282,7 +282,7 @@ export default function DriverDashboard() {
   if (!isOnline) {
     return (
       <div className="flex min-h-screen flex-col items-center justify-center px-6">
-        <div className="mb-6 flex h-28 w-28 items-center justify-center rounded-full bg-green-100 text-4xl font-bold text-green-700">
+        <div className="mb-6 flex h-28 w-28 items-center justify-center rounded-full bg-green-100 text-4xl font-bold text-green-700 dark:bg-green-900/40 dark:text-green-300">
           {driver?.name?.charAt(0)?.toUpperCase() ?? "D"}
         </div>
         <h1 className="mb-1 text-2xl font-bold">
@@ -398,7 +398,7 @@ export default function DriverDashboard() {
                       className="rounded-lg p-1.5 hover:bg-muted"
                       title="Navigate"
                     >
-                      <Navigation className="h-4 w-4 text-blue-600" />
+                      <Navigation className="h-4 w-4 text-blue-600 dark:text-blue-400" />
                     </button>
                     <button
                       type="button"
@@ -406,7 +406,7 @@ export default function DriverDashboard() {
                       className="rounded-lg p-1.5 hover:bg-muted"
                       title="Contact"
                     >
-                      <Phone className="h-4 w-4 text-green-600" />
+                      <Phone className="h-4 w-4 text-green-600 dark:text-green-400" />
                     </button>
                   </div>
                 )}
@@ -437,7 +437,7 @@ export default function DriverDashboard() {
                     type="button"
                     disabled={pendingOrderId === order.id}
                     onClick={() => handleRevertStatus(order)}
-                    className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full border border-border bg-white text-foreground hover:bg-muted disabled:opacity-60"
+                    className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full border border-border bg-card text-foreground hover:bg-muted disabled:opacity-60"
                     title="Back to Started"
                     aria-label="Back to Started"
                   >
@@ -454,7 +454,7 @@ export default function DriverDashboard() {
                   <button
                     type="button"
                     onClick={() => { setReportOrder(order); setReportReason("") }}
-                    className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full border border-red-200 text-red-500 hover:bg-red-50"
+                    className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full border border-destructive/30 text-destructive hover:bg-destructive/10"
                     title="Report issue"
                   >
                     <AlertTriangle className="h-4 w-4" />
@@ -467,7 +467,7 @@ export default function DriverDashboard() {
                     type="button"
                     disabled={pendingOrderId === order.id}
                     onClick={() => handleRevertStatus(order)}
-                    className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full border border-border bg-white text-foreground hover:bg-muted disabled:opacity-60"
+                    className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full border border-border bg-card text-foreground hover:bg-muted disabled:opacity-60"
                     title="Back to Picked Up"
                     aria-label="Back to Picked Up"
                   >
@@ -483,7 +483,7 @@ export default function DriverDashboard() {
                   <button
                     type="button"
                     onClick={() => { setReportOrder(order); setReportReason("") }}
-                    className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full border border-red-200 text-red-500 hover:bg-red-50"
+                    className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full border border-destructive/30 text-destructive hover:bg-destructive/10"
                     title="Report issue"
                   >
                     <AlertTriangle className="h-4 w-4" />
