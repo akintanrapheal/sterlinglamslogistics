@@ -21,10 +21,31 @@ export function DriverNativeChrome() {
   const router = useRouter()
   const { drawerOpen, setDrawerOpen } = useDriver()
 
-  // Status bar — white background with dark icons so the bar disappears
-  // into the app background instead of standing out as a green stripe.
+  // Status bar — follow the app theme so the bar blends into the background
+  // instead of sitting on top of it as a slab of the wrong colour.
+  //
+  // This was pinned to #ffffff and applied once on mount, so in dark mode a
+  // white strip sat above a near-black app. It also asked for light icons on
+  // that white background, which rendered the battery and signal indicators
+  // white-on-white — invisible rather than merely mismatched.
+  //
+  // Re-runs whenever the `dark` class on <html> changes, which covers the
+  // driver switching theme in Settings and the OS flipping night mode while
+  // "System Default" is selected.
   useEffect(() => {
-    void applyStatusBar({ backgroundColor: "#ffffff", dark: true })
+    function syncStatusBar() {
+      const isDark = document.documentElement.classList.contains("dark")
+      void applyStatusBar({
+        // Matches --background in app/globals.css for each theme.
+        backgroundColor: isDark ? "#121212" : "#ffffff",
+        lightIcons: isDark,
+      })
+    }
+
+    syncStatusBar()
+    const observer = new MutationObserver(syncStatusBar)
+    observer.observe(document.documentElement, { attributes: true, attributeFilter: ["class"] })
+    return () => observer.disconnect()
   }, [])
 
   // Android hardware back button. Re-register when drawerOpen flips so the

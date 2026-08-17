@@ -68,15 +68,24 @@ export async function hapticError(): Promise<void> {
 }
 
 /**
- * Set the Android status bar colour + foreground style. Call once on
- * driver-shell mount so the bar matches the app theme.
+ * Set the Android status bar colour + foreground style.
+ *
+ * `lightIcons` describes the *icons*, which is the thing callers actually
+ * reason about. Capacitor's own enum is named for the background it suits —
+ * Style.Dark means "light text, for dark backgrounds" — and the previous
+ * signature exposed that inversion as a `dark` flag, so passing a white
+ * background with `dark: true` produced white icons on white and made the
+ * battery and signal indicators invisible.
  */
-export async function applyStatusBar(opts: { backgroundColor: string; dark?: boolean }): Promise<void> {
+export async function applyStatusBar(opts: {
+  backgroundColor: string
+  lightIcons?: boolean
+}): Promise<void> {
   const statusBar = getCapacitor()?.Plugins?.StatusBar
   if (!statusBar) return
   try {
     await statusBar.setBackgroundColor({ color: opts.backgroundColor })
-    await statusBar.setStyle({ style: opts.dark ? "DARK" : "LIGHT" })
+    await statusBar.setStyle({ style: opts.lightIcons ? "DARK" : "LIGHT" })
     await statusBar.setOverlaysWebView({ overlay: false })
   } catch { /* ignore */ }
 }
