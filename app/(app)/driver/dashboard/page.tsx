@@ -67,8 +67,13 @@ export default function DriverDashboard() {
     setDrawerOpen,
     goOnline,
     refreshOrders,
+    patchOrder,
     optimizeRoute,
   } = useDriver()
+  // Re-entrancy guard for per-order status writes. This is a ref, not state,
+  // because the card now advances optimistically — driving a spinner off it
+  // would show the *next* step's button spinning straight after the tap.
+  const inFlightRef = useRef<Set<string>>(new Set())
   const [showOnlineToast, setShowOnlineToast] = useState(false)
   const [routeModalOpen, setRouteModalOpen] = useState(false)
   const [reportOrder, setReportOrder] = useState<Order | null>(null)
@@ -78,8 +83,6 @@ export default function DriverDashboard() {
   const [contactSheet, setContactSheet] = useState<Order | null>(null)
   const [actionPending, setActionPending] = useState(false)
   const [isRefreshing, setIsRefreshing] = useState(false)
-  const [pendingOrderId, setPendingOrderId] = useState<string | null>(null)
-  const pendingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const [pullDistance, setPullDistance] = useState(0)
   const touchStartY = useRef(0)
   const scrollContainerRef = useRef<HTMLDivElement>(null)
@@ -137,66 +140,43 @@ export default function DriverDashboard() {
     }
   }, [pullDistance, handlePullRefresh])
 
-  function setPending(id: string | null) {
-    if (pendingTimeoutRef.current) clearTimeout(pendingTimeoutRef.current)
-    setPendingOrderId(id)
-    if (id) {
-      pendingTimeoutRef.current = setTimeout(() => setPendingOrderId(null), 10000)
-    }
-  }
-
-  async function handleMarkPickedUp(order: Order) {
-    if (!session || pendingOrderId) return
+  /**
+   * Advance an order to `next`, showing it immediately.
+   *
+   * The card is patched before the request goes out, so pressing a button
+   * changes the card on the same frame. Previously each handler awaited the
+   * POST and then awaited refreshOrders(), meaning two round trips had to
+   * complete before anything moved — the spin-then-change drivers were
+   * seeing on every tap.
+   *
+   * On a network failure the update is queued and the optimistic state is
+   * *kept*: the write will replay, so reverting the card would be a lie and
+   * would also lose the driver's place in the flow. Only a real server
+   * rejection rolls back, since that is the one case where the new status
+   * genuinely did not take.
+   */
+  async function advanceStatus(
+    order: Order,
+    next: "picked-up" | "in-transit",
+    successToast: { title: string; description: string },
+  ) {
+    if (!session || inFlightRef.current.has(order.id)) return
+    const previousStatus = order.status
+    inFlightRef.current.add(order.id)
     void hapticTap("medium")
-    setPending(order.id)
+    patchOrder(order.id, { status: next })
+
     try {
       const res = await driverFetch(`/api/driver/orders/${encodeURIComponent(order.id)}/status`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ driverId: session.id, status: "picked-up" }),
+        body: JSON.stringify({ driverId: session.id, status: next }),
       })
-      if (!res.ok) throw new Error("Failed to mark picked-up")
-      await refreshOrders()
-      void hapticSuccess()
-      toast({ title: "Picked up", description: `${order.orderNumber} marked as picked up.` })
-    } catch (err) {
-      const isNetworkError = !navigator.onLine || err instanceof TypeError
-      if (isNetworkError) {
-        queueStatusUpdate({
-          id: `${order.id}_${Date.now()}`,
-          orderId: order.id,
-          orderNumber: order.orderNumber,
-          driverId: session.id,
-          status: "picked-up",
-          queuedAt: Date.now(),
-        })
-        void hapticSuccess()
-        toast({ title: "Saved offline", description: `${order.orderNumber} will sync when you reconnect.` })
-      } else {
-        void hapticError()
-        toast({ title: "Error", description: "Failed to update order.", variant: "destructive" })
-      }
-    } finally {
-      setPending(null)
-    }
-  }
-
-  async function handleMarkOnTheWay(order: Order) {
-    if (!session || pendingOrderId) return
-    void hapticTap("medium")
-    setPending(order.id)
-    try {
-      const res = await driverFetch(`/api/driver/orders/${encodeURIComponent(order.id)}/status`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ driverId: session.id, status: "in-transit" }),
-      })
-      if (!res.ok) throw new Error("Failed to mark in-transit")
-      await refreshOrders()
+      if (!res.ok) throw new Error(`Failed to mark ${next}`)
       void hapticSuccess()
       // Customer WhatsApp + SMS + email are dispatched server-side from the
       // /api/driver/orders/[orderId]/status route after the in-transit update.
-      toast({ title: "In transit", description: `${order.orderNumber} is now on the way.` })
+      toast(successToast)
     } catch (err) {
       const isNetworkError = !navigator.onLine || err instanceof TypeError
       if (isNetworkError) {
@@ -205,18 +185,33 @@ export default function DriverDashboard() {
           orderId: order.id,
           orderNumber: order.orderNumber,
           driverId: session.id,
-          status: "in-transit",
+          status: next,
           queuedAt: Date.now(),
         })
         void hapticSuccess()
         toast({ title: "Saved offline", description: `${order.orderNumber} will sync when you reconnect.` })
       } else {
+        patchOrder(order.id, { status: previousStatus })
         void hapticError()
         toast({ title: "Error", description: "Failed to update order.", variant: "destructive" })
       }
     } finally {
-      setPending(null)
+      inFlightRef.current.delete(order.id)
     }
+  }
+
+  function handleMarkPickedUp(order: Order) {
+    void advanceStatus(order, "picked-up", {
+      title: "Picked up",
+      description: `${order.orderNumber} marked as picked up.`,
+    })
+  }
+
+  function handleMarkOnTheWay(order: Order) {
+    void advanceStatus(order, "in-transit", {
+      title: "In transit",
+      description: `${order.orderNumber} is now on the way.`,
+    })
   }
 
   // Driver tapped the small back-arrow on a picked-up / in-transit card —
@@ -224,14 +219,16 @@ export default function DriverDashboard() {
   // status route already supports picked-up → started and in-transit →
   // picked-up reverts (see the txn in app/(app)/api/driver/orders/[orderId]/status/route.ts).
   async function handleRevertStatus(order: Order) {
-    if (!session || pendingOrderId) return
+    if (!session || inFlightRef.current.has(order.id)) return
     const prevStatus =
       order.status === "picked-up" ? "started" :
       order.status === "in-transit" ? "picked-up" :
       null
     if (!prevStatus) return
+    const currentStatus = order.status
+    inFlightRef.current.add(order.id)
     void hapticTap("light")
-    setPending(order.id)
+    patchOrder(order.id, { status: prevStatus })
     try {
       const res = await driverFetch(`/api/driver/orders/${encodeURIComponent(order.id)}/status`, {
         method: "POST",
@@ -239,12 +236,12 @@ export default function DriverDashboard() {
         body: JSON.stringify({ driverId: session.id, status: prevStatus }),
       })
       if (!res.ok) throw new Error("Failed to revert status")
-      await refreshOrders()
     } catch {
+      patchOrder(order.id, { status: currentStatus })
       void hapticError()
       toast({ title: "Error", description: "Could not undo last step.", variant: "destructive" })
     } finally {
-      setPending(null)
+      inFlightRef.current.delete(order.id)
     }
   }
 
@@ -424,20 +421,18 @@ export default function DriverDashboard() {
               {order.status === "started" && (
                 <button
                   type="button"
-                  disabled={pendingOrderId === order.id}
                   onClick={() => handleMarkPickedUp(order)}
-                  className="flex w-full items-center justify-center gap-2 rounded-full bg-orange-500 py-3.5 text-sm font-bold text-white hover:bg-orange-600 active:scale-[0.98] transition-transform disabled:opacity-60 disabled:pointer-events-none"
+                  className="flex w-full items-center justify-center gap-2 rounded-full bg-orange-500 py-3.5 text-sm font-bold text-white hover:bg-orange-600 active:scale-[0.98] transition-transform"
                 >
-                  {pendingOrderId === order.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <>Mark as Picked Up  →</>}
+                  Mark as Picked Up  →
                 </button>
               )}
               {order.status === "picked-up" && (
                 <div className="flex items-center gap-2">
                   <button
                     type="button"
-                    disabled={pendingOrderId === order.id}
                     onClick={() => handleRevertStatus(order)}
-                    className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full border border-border bg-card text-foreground hover:bg-muted disabled:opacity-60"
+                    className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full border border-border bg-card text-foreground hover:bg-muted"
                     title="Back to Started"
                     aria-label="Back to Started"
                   >
@@ -445,11 +440,10 @@ export default function DriverDashboard() {
                   </button>
                   <button
                     type="button"
-                    disabled={pendingOrderId === order.id}
                     onClick={() => handleMarkOnTheWay(order)}
-                    className="flex flex-1 items-center justify-center gap-2 rounded-full bg-green-500 py-3.5 text-sm font-bold text-white hover:bg-green-600 active:scale-[0.98] transition-transform disabled:opacity-60 disabled:pointer-events-none"
+                    className="flex flex-1 items-center justify-center gap-2 rounded-full bg-green-500 py-3.5 text-sm font-bold text-white hover:bg-green-600 active:scale-[0.98] transition-transform"
                   >
-                    {pendingOrderId === order.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <>Mark as On the way  →</>}
+                    Mark as On the way  →
                   </button>
                   <button
                     type="button"
@@ -465,9 +459,8 @@ export default function DriverDashboard() {
                 <div className="flex items-center gap-2">
                   <button
                     type="button"
-                    disabled={pendingOrderId === order.id}
                     onClick={() => handleRevertStatus(order)}
-                    className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full border border-border bg-card text-foreground hover:bg-muted disabled:opacity-60"
+                    className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full border border-border bg-card text-foreground hover:bg-muted"
                     title="Back to Picked Up"
                     aria-label="Back to Picked Up"
                   >
@@ -508,7 +501,6 @@ export default function DriverDashboard() {
               <button
                 type="button"
                 className="w-full rounded-xl bg-green-600 py-3 text-sm font-semibold text-white hover:bg-green-700 disabled:opacity-60"
-                disabled={!!pendingOrderId}
                 onClick={async () => {
                   setRouteModalOpen(false)
                   const started = activeOrders.filter((o) => o.status === "started")

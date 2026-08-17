@@ -42,7 +42,7 @@ export default function DeliveryCompletionPage() {
   const searchParams = useSearchParams()
   const orderId = searchParams.get("id") ?? ""
   const router = useRouter()
-  const { session, liveGps } = useDriver()
+  const { session, liveGps, patchOrder } = useDriver()
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const [order, setOrder] = useState<Order | null>(null)
   const [loading, setLoading] = useState(true)
@@ -379,6 +379,10 @@ export default function DeliveryCompletionPage() {
 
       void hapticSuccess()
       toast({ title: "Delivery completed!", description: `${order.orderNumber} marked as delivered.` })
+      // Mark it delivered in shared state before navigating. The dashboard
+      // reads the same order list, so without this the completed order stays
+      // on the Orders tab until the driver pulls to refresh.
+      patchOrder(order.id, { status: "delivered" })
       router.push("/driver/dashboard")
     } catch (err) {
       // Network failure — queue for automatic retry when connectivity returns
@@ -406,6 +410,9 @@ export default function DeliveryCompletionPage() {
           title: "Saved offline",
           description: `${order.orderNumber} will be submitted automatically when you reconnect.`,
         })
+        // The write is queued and will replay, so reflect it now — otherwise
+        // the order sits on the Orders tab looking undelivered.
+        patchOrder(order.id, { status: "delivered" })
         router.push("/driver/dashboard")
       } else {
         void hapticError()

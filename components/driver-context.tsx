@@ -29,6 +29,15 @@ interface DriverContextValue {
   goOnline: () => Promise<void>
   goOffline: () => Promise<void>
   refreshOrders: () => Promise<void>
+  /**
+   * Apply a change to one order in local state without refetching the list.
+   *
+   * Status actions used to await refreshOrders(), so the card only moved
+   * after a full round trip returned the whole order list — the driver
+   * pressed a button and watched a spinner before anything happened. Patch
+   * locally first and let the request settle in the background.
+   */
+  patchOrder: (orderId: string, changes: Partial<Order>) => void
   optimizeRoute: (lastStopId?: string | null) => Promise<boolean>
   login: (session: DriverSession) => void
   logout: () => void
@@ -338,6 +347,10 @@ export function DriverProvider({ children }: { children: ReactNode }) {
     }
   }, [])
 
+  const patchOrder = useCallback((orderId: string, changes: Partial<Order>) => {
+    setOrders((prev) => prev.map((o) => (o.id === orderId ? { ...o, ...changes } : o)))
+  }, [])
+
   const refreshOrders = useCallback(async () => {
     if (!session) return
     setLoadingOrders(true)
@@ -522,6 +535,7 @@ export function DriverProvider({ children }: { children: ReactNode }) {
     goOnline,
     goOffline,
     refreshOrders,
+    patchOrder,
     optimizeRoute,
     login,
     logout,
@@ -532,7 +546,7 @@ export function DriverProvider({ children }: { children: ReactNode }) {
     syncing,
     syncPending: async () => { await retryPendingRef.current?.() },
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }), [session, driver, orders, isOnline, justWentOnline, loadingSession, loadingOrders, drawerOpen, refreshOrders, optimizeRoute, liveGps, gpsError, pendingDeliveryCount, isConnected, syncing])
+  }), [session, driver, orders, isOnline, justWentOnline, loadingSession, loadingOrders, drawerOpen, refreshOrders, patchOrder, optimizeRoute, liveGps, gpsError, pendingDeliveryCount, isConnected, syncing])
 
   return (
     <DriverContext.Provider value={contextValue}>
