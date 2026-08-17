@@ -4,8 +4,10 @@ import { useState, useEffect } from "react"
 import { useRouter } from "next/navigation"
 import { ArrowLeft, Check } from "lucide-react"
 import { cn } from "@/lib/utils"
+import { applyTheme, getStoredTheme, setStoredTheme, type DriverTheme } from "@/lib/driver-theme"
+import { hapticTap } from "@/lib/native-bridge"
 
-const options = [
+const options: { value: DriverTheme; label: string }[] = [
   { value: "light", label: "Light" },
   { value: "dark", label: "Dark" },
   { value: "system", label: "System Default" },
@@ -13,26 +15,20 @@ const options = [
 
 export default function DriverDisplaySettingsPage() {
   const router = useRouter()
-  const [theme, setTheme] = useState("system")
+  const [theme, setTheme] = useState<DriverTheme>("system")
 
   useEffect(() => {
-    const saved = localStorage.getItem("driverTheme")
-    if (saved) setTheme(saved)
+    setTheme(getStoredTheme())
   }, [])
 
-  function selectTheme(value: string) {
+  function selectTheme(value: DriverTheme) {
+    void hapticTap()
     setTheme(value)
-    localStorage.setItem("driverTheme", value)
-
-    const root = document.documentElement
-    if (value === "dark") {
-      root.classList.add("dark")
-    } else if (value === "light") {
-      root.classList.remove("dark")
-    } else {
-      const prefersDark = window.matchMedia("(prefers-color-scheme: dark)").matches
-      root.classList.toggle("dark", prefersDark)
-    }
+    // Persisting and applying now live in lib/driver-theme so the layout can
+    // reapply the choice at startup — this screen used to do both inline,
+    // which is why the theme reset every time the app was reopened.
+    setStoredTheme(value)
+    applyTheme(value)
   }
 
   return (

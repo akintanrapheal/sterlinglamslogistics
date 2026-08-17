@@ -440,7 +440,7 @@ export default function DeliveryCompletionPage() {
   }
 
   return (
-    <div className="mx-auto flex min-h-screen max-w-md flex-col bg-white">
+    <div className="mx-auto flex min-h-screen max-w-md flex-col bg-background">
       {/* Header */}
       <div className="flex items-center gap-2 border-b px-4 py-3">
         <button
@@ -474,18 +474,20 @@ export default function DeliveryCompletionPage() {
 
         {/* Signature preview (only when captured) */}
         {signatureData && (
-          <div className="mb-3 overflow-hidden rounded-xl border border-green-200 bg-green-50">
+          <div className="mb-3 overflow-hidden rounded-xl border border-green-200 bg-green-50 dark:border-green-900 dark:bg-green-950/40">
+            {/* bg-white for the same reason as the pad itself — the ink is
+                near-black, so the preview must not follow the theme. */}
             <img src={signatureData} alt="Customer signature" className="h-20 w-full object-contain bg-white" />
             <div className="flex items-center justify-between gap-2 px-3 py-1.5">
               <div className="flex items-center gap-1.5">
-                <CheckCircle className="h-3.5 w-3.5 text-green-600" />
-                <span className="text-xs font-semibold text-green-600">Signature captured</span>
+                <CheckCircle className="h-3.5 w-3.5 text-green-600 dark:text-green-400" />
+                <span className="text-xs font-semibold text-green-600 dark:text-green-400">Signature captured</span>
               </div>
               <button
                 type="button"
                 onClick={() => setSignatureData(null)}
-                className="rounded p-1 text-gray-400 hover:bg-gray-100 hover:text-red-500"
-                title="Clear signature"
+                className="rounded p-1 text-muted-foreground hover:bg-muted hover:text-destructive"
+                aria-label="Clear signature"
               >
                 <Trash2 className="h-3.5 w-3.5" />
               </button>
@@ -498,7 +500,7 @@ export default function DeliveryCompletionPage() {
           <button
             type="button"
             onClick={openCamera}
-            className="flex flex-1 items-center justify-center gap-2 rounded-full border border-border bg-white py-3 text-sm font-medium text-foreground hover:bg-muted"
+            className="flex flex-1 items-center justify-center gap-2 rounded-full border border-border bg-card py-3 text-sm font-medium text-foreground hover:bg-muted"
           >
             <Camera className="h-4 w-4" />
             {photoData ? "Retake Photo" : "Add Image"}
@@ -508,7 +510,7 @@ export default function DeliveryCompletionPage() {
             onClick={openSignaturePad}
             className={`flex flex-1 items-center justify-center gap-2 rounded-full border py-3 text-sm font-medium ${
               signatureData
-                ? "border-green-600 text-green-600 hover:bg-green-50"
+                ? "border-green-600 text-green-600 hover:bg-green-50 dark:border-green-400 dark:text-green-400 dark:hover:bg-green-950/40"
                 : "border-border text-foreground hover:bg-muted"
             }`}
           >
@@ -599,7 +601,11 @@ export default function DeliveryCompletionPage() {
 
           {/* The wrapper is the measured box; the canvas fills it exactly so
               resizeSignatureCanvas can match the bitmap to it 1:1. */}
-          <div ref={sigWrapRef} className="relative m-3 flex-1 overflow-hidden rounded-xl border-2 border-dashed bg-white">
+          {/* bg-white is deliberate and must not become a theme token: the ink
+              is near-black and the canvas is exported as a PNG, so a dark
+              surface here would make the signature invisible in the app and
+              produce an unreadable proof-of-delivery image. */}
+          <div ref={sigWrapRef} className="relative m-3 flex-1 overflow-hidden rounded-xl border-2 border-dashed border-border bg-white">
             <canvas
               ref={canvasRef}
               className="absolute inset-0 h-full w-full cursor-crosshair touch-none"
