@@ -7,6 +7,7 @@ const log = createLogger("rate-limit")
 
 let ratelimit: Ratelimit | null = null
 let driverLocationRatelimit: Ratelimit | null = null
+let driverApiRatelimit: Ratelimit | null = null
 
 function getRateLimiter() {
   if (ratelimit) return ratelimit
@@ -51,6 +52,69 @@ function getDriverLocationLimiter() {
   })
 
   return driverLocationRatelimit
+}
+
+/**
+ * Limiter for authenticated driver API calls, keyed per driver.
+ *
+ * These endpoints previously shared the generic 20 req/60 s IP bucket, which
+ * an ordinary shift exceeded on its own: the app polls /profile every 10 s
+ * (6/min) before the driver touches anything, then adds order fetches, order
+ * detail views and a status write per delivery step. Worse, drivers on
+ * mobile carriers share a NAT IP, so two or three working at once drained
+ * the shared bucket on background polling alone and all of them started
+ * getting 429s mid-delivery.
+ *
+ * 120/min per driver leaves generous headroom for the poll plus bursts on
+ * app resume, while still bounding a single compromised token. Because the
+ * bucket is per driver, one busy driver can no longer starve another.
+ */
+function getDriverApiLimiter() {
+  if (driverApiRatelimit) return driverApiRatelimit
+
+  const url = process.env.UPSTASH_REDIS_REST_URL
+  const token = process.env.UPSTASH_REDIS_REST_TOKEN
+  if (!url || !token) return null
+
+  driverApiRatelimit = new Ratelimit({
+    redis: new Redis({ url, token }),
+    limiter: Ratelimit.slidingWindow(120, "60 s"),
+    analytics: true,
+  })
+
+  return driverApiRatelimit
+}
+
+/**
+ * Rate limit an authenticated driver API call. Call this *after* the session
+ * has been verified, so the bucket is keyed on the driver rather than an IP
+ * that may be shared by a whole carrier NAT.
+ */
+export async function checkDriverApiRateLimit(driverId: string): Promise<NextResponse | null> {
+  const limiter = getDriverApiLimiter()
+  if (!limiter) return null
+
+  try {
+    const result = await limiter.limit(getDriverRateLimitIdentifier(driverId))
+    if (!result.success) {
+      log.warn({ driverId, remaining: result.remaining }, "Driver API rate limit exceeded")
+      return NextResponse.json(
+        { ok: false, error: "Too many requests. Please try again later." },
+        {
+          status: 429,
+          headers: {
+            "X-RateLimit-Limit": String(result.limit),
+            "X-RateLimit-Remaining": String(result.remaining),
+            "X-RateLimit-Reset": String(result.reset),
+          },
+        },
+      )
+    }
+    return null
+  } catch (err) {
+    log.error({ err }, "Driver API rate limit check failed — allowing request")
+    return null
+  }
 }
 
 /**

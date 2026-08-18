@@ -1,17 +1,18 @@
 import { NextResponse } from "next/server"
 import { adminDb } from "@/lib/server/firebase-admin"
 import { verifyDriverSession } from "@/lib/server/driver-session"
-import { checkRateLimit, getRateLimitIdentifier } from "@/lib/rate-limit"
+import { checkDriverApiRateLimit } from "@/lib/rate-limit"
 
 export async function GET(
   req: Request,
   { params }: { params: Promise<{ orderId: string }> }
 ) {
-  const rl = await checkRateLimit(getRateLimitIdentifier(req))
-  if (rl) return rl
-
   const tokenDriverId = verifyDriverSession(req)
   if (!tokenDriverId) return NextResponse.json({ ok: false, error: "Unauthorized" }, { status: 401 })
+
+  // Per-driver, not per-IP — see checkDriverApiRateLimit.
+  const rl = await checkDriverApiRateLimit(tokenDriverId)
+  if (rl) return rl
 
   const { orderId } = await params
 

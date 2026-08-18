@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server"
 import { randomUUID } from "crypto"
-import { checkRateLimit, getRateLimitIdentifier } from "@/lib/rate-limit"
+import { checkRateLimit, checkDriverApiRateLimit, getRateLimitIdentifier } from "@/lib/rate-limit"
 import { adminUpdateDriver, adminFetchDriverById } from "@/lib/server/firestore-admin"
 import { adminDb, adminStorage } from "@/lib/server/firebase-admin"
 import { createLogger } from "@/lib/logger"
@@ -81,7 +81,15 @@ export async function POST(
   req: Request,
   { params }: { params: Promise<{ orderId: string }> }
 ) {
-  const rateLimitResponse = await checkRateLimit(getRateLimitIdentifier(req))
+  // Prefer a per-driver bucket, keyed on the session token so it can be
+  // resolved before the body is read. Requests without a token fall back to
+  // the IP bucket and are rejected as Unauthorized further down anyway. The
+  // old IP-only limit was shared with the 10-second profile poll, so drivers
+  // on one carrier NAT drained it between them mid-shift.
+  const tokenDriverId = resolveDriverIdFromRequest(req)
+  const rateLimitResponse = tokenDriverId
+    ? await checkDriverApiRateLimit(tokenDriverId)
+    : await checkRateLimit(getRateLimitIdentifier(req))
   if (rateLimitResponse) return rateLimitResponse
 
   const { orderId } = await params

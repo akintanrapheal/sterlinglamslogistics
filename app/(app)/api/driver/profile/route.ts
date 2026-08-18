@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server"
-import { checkRateLimit, getRateLimitIdentifier } from "@/lib/rate-limit"
+import { checkRateLimit, checkDriverApiRateLimit, getRateLimitIdentifier } from "@/lib/rate-limit"
 import { adminUpdateDriver, adminFetchDriverById } from "@/lib/server/firestore-admin"
 import { hashPassword, verifyPassword } from "@/lib/password"
 import { createLogger } from "@/lib/logger"
@@ -8,13 +8,17 @@ import { resolveDriverIdFromRequest } from "@/lib/server/driver-auth"
 const log = createLogger("api:driver:profile")
 
 export async function GET(req: Request) {
-  const rateLimitResponse = await checkRateLimit(getRateLimitIdentifier(req))
-  if (rateLimitResponse) return rateLimitResponse
-
+  // Identify first, then rate limit per driver. The driver app polls this
+  // route every 10 s, so on the old shared IP bucket (20/60 s) a handful of
+  // drivers behind one carrier NAT exhausted it on polling alone and every
+  // other driver call started failing.
   const driverId = resolveDriverIdFromRequest(req)
   if (!driverId) {
     return NextResponse.json({ ok: false, error: "Unauthorized." }, { status: 401 })
   }
+
+  const rateLimitResponse = await checkDriverApiRateLimit(driverId)
+  if (rateLimitResponse) return rateLimitResponse
 
   try {
     const driver = await adminFetchDriverById(driverId)
