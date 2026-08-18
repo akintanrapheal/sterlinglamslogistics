@@ -97,11 +97,15 @@
   "pnpm": {
     "overrides": {
       "websocket-driver": "^0.7.5",
-      "protobufjs": "^7.5.5"
+      "protobufjs": "^7.5.5",
+      "@grpc/grpc-js": "^1.9.16",
+      "lodash": "^4.18.1"
     }
   },
   "overrides": {
     "websocket-driver": "^0.7.5",
-    "protobufjs": "^7.5.5"
+    "protobufjs": "^7.5.5",
+    "@grpc/grpc-js": "^1.9.16",
+    "lodash": "^4.18.1"
   }
 }
