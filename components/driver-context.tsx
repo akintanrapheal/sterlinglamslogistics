@@ -356,7 +356,20 @@ export function DriverProvider({ children }: { children: ReactNode }) {
     setLoadingOrders(true)
     try {
       const res = await driverFetch(`/api/driver/orders?driverId=${encodeURIComponent(session.id)}`, {})
-      if (!res.ok) throw new Error("Failed to load orders")
+      if (!res.ok) {
+        // Distinguish the failure modes. "Failed to load deliveries" for
+        // everything told the driver nothing about whether to wait, retry, or
+        // report it — and a throttled request is worth waiting out, not
+        // hammering, which is what a driver naturally does with a bare error.
+        if (res.status === 429) {
+          toast({
+            title: "Slow down a moment",
+            description: "Too many requests. Your deliveries will refresh shortly.",
+          })
+          return
+        }
+        throw new Error(`Failed to load orders (${res.status})`)
+      }
       const { orders: data } = (await res.json()) as { ok: boolean; orders: Order[] }
       const hasRouteOrder = data.some((o) => typeof o.routeOrder === "number")
       const sorted = data.sort((a, b) => {
@@ -387,8 +400,18 @@ export function DriverProvider({ children }: { children: ReactNode }) {
         return (priority[a.status] ?? 5) - (priority[b.status] ?? 5)
       })
       setOrders(sorted)
-    } catch {
-      toast({ title: "Error", description: "Failed to load deliveries.", variant: "destructive" })
+    } catch (err) {
+      // Keep whatever is already on screen. Blanking the list on a transient
+      // failure would strand a driver mid-shift with no addresses to work
+      // from, which is worse than showing slightly stale ones.
+      const offline = !navigator.onLine || err instanceof TypeError
+      toast({
+        title: offline ? "No connection" : "Couldn't refresh deliveries",
+        description: offline
+          ? "Showing your last loaded deliveries. They'll update when you reconnect."
+          : "Showing your last loaded deliveries. Pull down to try again.",
+        variant: "destructive",
+      })
     } finally {
       setLoadingOrders(false)
     }
