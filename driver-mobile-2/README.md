@@ -9,7 +9,7 @@ different shipping model:
 | Needs internet at cold launch? | Yes (offline.html shows otherwise) | **No** — the shell renders from local files |
 | Needs internet for API calls?  | Yes                          | Yes (API calls go to the live server)     |
 | Update story          | Push to `main` → Vercel deploys → all phones get it next launch | Rebuild APK, sideload to each driver |
-| `appId`               | `com.sterlinglams.driver`              | `com.sterlinglams.driver2` (so the two installs co-exist on one phone) |
+| `appId`               | `com.sterlinglams.driver`              | `com.sterlinglams.driver` (driver-mobile has since been removed; this is the only driver app) |
 
 You can install both APKs on the same phone and compare them flow-by-flow.
 
