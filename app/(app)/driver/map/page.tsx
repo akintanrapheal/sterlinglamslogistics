@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useRef, useMemo } from "react"
 import { useRouter } from "next/navigation"
-import { Menu, List, MapPin, Navigation, Phone } from "lucide-react"
+import { Menu, List, MapPin, MapPinOff, Navigation, Phone } from "lucide-react"
 import { Badge } from "@/components/ui/badge"
 import { useDriver } from "@/components/driver-context"
 import type { Order } from "@/lib/data"
@@ -21,6 +21,7 @@ export default function DriverMapPage() {
   const hubMarkerRef = useRef<google.maps.Marker | null>(null)
   const [selectedOrder, setSelectedOrder] = useState<Order | null>(null)
   const [mapReady, setMapReady] = useState(false)
+  const [mapError, setMapError] = useState<string | null>(null)
 
   // Redirect if no session
   useEffect(() => {
@@ -62,7 +63,16 @@ export default function DriverMapPage() {
     let cancelled = false
 
     async function initMap() {
-      await loadGoogleMaps()
+      try {
+        await loadGoogleMaps()
+      } catch (err) {
+        // Same guard as the admin Routes page: an unusable key should leave a
+        // readable message on the map panel, not throw out of an effect.
+        if (!cancelled) {
+          setMapError(err instanceof Error ? err.message : "Google Maps failed to load.")
+        }
+        return
+      }
       if (cancelled || !mapContainerRef.current) return
 
       const hubLat = Number(process.env.NEXT_PUBLIC_HUB_LAT) || 6.4541
@@ -275,6 +285,17 @@ export default function DriverMapPage() {
 
       {/* Map */}
       <div ref={mapContainerRef} className="h-full w-full" />
+
+      {mapError && (
+        <div className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-3 bg-background/95 p-6 text-center">
+          <MapPinOff className="h-8 w-8 text-muted-foreground" />
+          <p className="font-semibold">Map unavailable</p>
+          <p className="max-w-xs text-sm text-muted-foreground">
+            Your deliveries are still listed under Orders. Ask dispatch to check the
+            Google Maps key.
+          </p>
+        </div>
+      )}
 
       {/* My location button */}
       {driverPos && (

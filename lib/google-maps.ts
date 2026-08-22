@@ -51,7 +51,20 @@ export function loadGoogleMaps(): Promise<typeof google.maps> {
       script.src = `https://maps.googleapis.com/maps/api/js?key=${activeKey}&libraries=places`
       script.async = true
       script.defer = true
-      script.onload = () => resolve(window.google.maps)
+      script.onload = () => {
+        // Google serves a 200 script even for a rejected key — it just never
+        // populates window.google.maps. Without this check the loader resolves
+        // "successfully" and the first `new google.maps.Map(...)` throws a
+        // TypeError instead, which is far harder to trace back to the key.
+        if (!window.google?.maps?.Map) {
+          loadPromise = null
+          reject(new Error(
+            "Google Maps script loaded but the API is unavailable — usually an invalid, deleted, restricted or unbilled key."
+          ))
+          return
+        }
+        resolve(window.google.maps)
+      }
       script.onerror = () => {
         // Allow retries on subsequent calls if the first load fails.
         loadPromise = null
