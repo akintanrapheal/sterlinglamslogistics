@@ -153,12 +153,10 @@ export default function DriverMapPage() {
     transitLayerRef.current?.setMap(transitOn ? mapRef.current : null)
   }, [transitOn, mapReady])
 
-  // Poll for new orders every 15 seconds
-  useEffect(() => {
-    if (!session || !isOnline) return
-    const interval = setInterval(() => refreshOrders(), 15000)
-    return () => clearInterval(interval)
-  }, [session, isOnline, refreshOrders])
+  // Order polling now lives in DriverProvider so it covers every screen, not
+  // just this one — a driver on the Orders tab was previously never told
+  // about a newly assigned job. Polling here too would just double the
+  // request rate for no benefit.
 
   // Initialize Google Map
   useEffect(() => {
@@ -386,7 +384,7 @@ export default function DriverMapPage() {
         <div className="flex items-center gap-1">
           {/* Map layers. This slot used to be a second route back to the
               Orders tab, which the bottom nav already provides — so the only
-              button on the map screen did nothing map-related. */}
+              button on the map  screen did nothing map-related. */}
           <button
             type="button"
             onClick={() => { void hapticTap(); setLayersOpen(true) }}

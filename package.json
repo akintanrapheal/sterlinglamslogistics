@@ -12,11 +12,7 @@
     "test:watch": "vitest",
     "seed": "node seed-firestore.mjs",
     "seed:admin": "node seed-admin.mjs",
-    "backfill:distance": "node backfill-distance.mjs",
-    "driver:mobile:install": "npm install --prefix driver-mobile",
-    "driver:mobile:add-android": "npm run driver:mobile:install && npm --prefix driver-mobile run add:android",
-    "driver:mobile:sync": "npm --prefix driver-mobile run sync",
-    "driver:mobile:open": "npm --prefix driver-mobile run open:android"
+    "backfill:distance": "node backfill-distance.mjs"
   },
   "dependencies": {
     "@googlemaps/markerclusterer": "^2.6.2",

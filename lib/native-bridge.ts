@@ -116,6 +116,25 @@ export async function onAndroidBack(handler: () => boolean | Promise<boolean>): 
   }
 }
 
+/**
+ * Run a callback when the Android app returns to the foreground.
+ *
+ * visibilitychange alone isn't enough inside a Capacitor WebView — Android
+ * can suspend the whole process, and the page may be restored without the
+ * document ever reporting a visibility transition. Returns an unsubscribe fn;
+ * a no-op outside the APK.
+ */
+export async function onAppResume(handler: () => void): Promise<() => void> {
+  const app = getCapacitor()?.Plugins?.App
+  if (!app) return () => {}
+  try {
+    const listener = await app.addListener("resume", handler)
+    return () => { void listener.remove() }
+  } catch {
+    return () => {}
+  }
+}
+
 /** True when running inside a Capacitor WebView (driver-mobile APK). */
 export function isNativeApp(): boolean {
   return Boolean(getCapacitor()?.isNativePlatform?.())
