@@ -136,7 +136,28 @@ export function DriverProvider({ children }: { children: ReactNode }) {
     async function pollProfile() {
       try {
         const res = await driverFetch("/api/driver/profile", {})
-        if (!res.ok || cancelled) return
+        if (cancelled) return
+
+        // A 404 means the token is valid but the driver record it names is
+        // gone — the account was deleted, or the Firestore data was rebuilt
+        // and the document has a new id. The session can never recover on its
+        // own, and every other driver call fails alongside it.
+        //
+        // This used to fall into the `!res.ok` early return, so the app sat
+        // there indefinitely showing the placeholder name and a 0.00 rating
+        // while orders quietly failed to refresh — with nothing on screen
+        // connecting the two or suggesting signing in again.
+        if (res.status === 404) {
+          toast({
+            title: "Session out of date",
+            description: "Your driver account could not be found. Please sign in again.",
+            variant: "destructive",
+          })
+          logout()
+          return
+        }
+
+        if (!res.ok) return
         const data = (await res.json()) as { ok: boolean; driver?: Driver }
         if (data.driver && !cancelled) {
           setDriver(data.driver)
