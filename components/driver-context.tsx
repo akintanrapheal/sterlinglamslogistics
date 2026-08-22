@@ -96,6 +96,9 @@ export function DriverProvider({ children }: { children: ReactNode }) {
   const lastGpsWriteRef = useRef<number>(0)
   const isRetryingRef = useRef(false)
   const retryPendingRef = useRef<(() => Promise<void>) | null>(null)
+  // True while refreshes are failing, so the toast fires once per outage
+  // rather than once per polled attempt.
+  const refreshFailedRef = useRef(false)
 
   // Load session from localStorage
   useEffect(() => {
@@ -420,18 +423,29 @@ export function DriverProvider({ children }: { children: ReactNode }) {
       })
       setOrders(sorted)
       saveCachedOrders(session.id, sorted)
+      // Recovered — the next failure is news again.
+      refreshFailedRef.current = false
     } catch (err) {
       // Keep whatever is already on screen. Blanking the list on a transient
       // failure would strand a driver mid-shift with no addresses to work
       // from, which is worse than showing slightly stale ones.
-      const offline = !navigator.onLine || err instanceof TypeError
-      toast({
-        title: offline ? "No connection" : "Couldn't refresh deliveries",
-        description: offline
-          ? "Showing your last loaded deliveries. They'll update when you reconnect."
-          : "Showing your last loaded deliveries. Pull down to try again.",
-        variant: "destructive",
-      })
+      //
+      // Toast only on the transition into failure. The map polls every 15s, so
+      // announcing every failed attempt meant a banner reappearing four times
+      // a minute for as long as the problem lasted — unreadable, and it buries
+      // toasts the driver actually needs to act on. The DriverStatusBanner
+      // already shows the persistent state.
+      if (!refreshFailedRef.current) {
+        refreshFailedRef.current = true
+        const offline = !navigator.onLine || err instanceof TypeError
+        toast({
+          title: offline ? "No connection" : "Couldn't refresh deliveries",
+          description: offline
+            ? "Showing your last loaded deliveries. They'll update when you reconnect."
+            : "Showing your last loaded deliveries. Pull down to try again.",
+          variant: "destructive",
+        })
+      }
     } finally {
       setLoadingOrders(false)
     }
