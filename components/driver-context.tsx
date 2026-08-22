@@ -9,6 +9,7 @@ import { driverFetch, clearDriverToken } from "@/lib/driver-client"
 import { getPendingDeliveries, removePendingDelivery, pendingDeliveryCount as getPendingCount } from "@/lib/delivery-queue"
 import { getPendingStatusUpdates, removeStatusUpdate, pendingStatusCount } from "@/lib/status-queue"
 import { loadCachedOrders, saveCachedOrders, clearCachedOrders } from "@/lib/order-cache"
+import { onAppResume } from "@/lib/native-bridge"
 
 interface DriverSession {
   id: string
@@ -63,6 +64,15 @@ interface DriverContextValue {
 // Backoff bounds for flushing the offline write queues.
 const RETRY_BASE_MS = 20_000
 const RETRY_MAX_MS = 5 * 60_000
+
+/**
+ * How often to re-read the order list while a driver is online.
+ *
+ * 20s keeps a newly assigned job visible quickly without being wasteful:
+ * against the 120/min per-driver API budget this costs 3/min, alongside the
+ * 6/min profile poll.
+ */
+const ORDER_POLL_MS = 20_000
 
 const DriverContext = createContext<DriverContextValue | null>(null)
 
@@ -495,6 +505,39 @@ export function DriverProvider({ children }: { children: ReactNode }) {
   // Load orders when online
   useEffect(() => {
     if (session && isOnline) refreshOrders()
+  }, [session, isOnline, refreshOrders])
+
+  /**
+   * Keep the order list current without the driver pulling to refresh.
+   *
+   * Polling previously lived only on the map screen, so a driver sitting on
+   * the Orders tab — where they spend the shift — never saw a newly assigned
+   * job, and an order unassigned by dispatch stayed on their list until they
+   * pulled down. Run it from the context instead so every screen benefits.
+   *
+   * Also refresh on resume: Android suspends timers for a backgrounded app,
+   * so without this the first thing a driver sees after unlocking the phone
+   * is whatever was on screen when they pocketed it.
+   */
+  useEffect(() => {
+    if (!session || !isOnline) return
+
+    const interval = window.setInterval(() => { void refreshOrders() }, ORDER_POLL_MS)
+
+    function onVisible() {
+      if (document.visibilityState === "visible") void refreshOrders()
+    }
+    document.addEventListener("visibilitychange", onVisible)
+
+    // Capacitor fires this on Android resume; harmless no-op in a browser.
+    let removeAppListener: (() => void) | null = null
+    void onAppResume(() => { void refreshOrders() }).then((fn) => { removeAppListener = fn })
+
+    return () => {
+      window.clearInterval(interval)
+      document.removeEventListener("visibilitychange", onVisible)
+      removeAppListener?.()
+    }
   }, [session, isOnline, refreshOrders])
 
   async function goOnline() {

@@ -6,10 +6,10 @@
    main project into a sibling location — still picks them up via
    Tailwind v4's source-scanning. Paths are relative to *this file*,
    so they resolve to ../components etc. in either build location. */
-@source "../components";
-@source "../hooks";
-@source "../lib";
-@source "../app";
+@source "C:/Users/user/Downloads/sterlinglamslogistics-main/sterlinglamslogistics-main/components";
+@source "C:/Users/user/Downloads/sterlinglamslogistics-main/sterlinglamslogistics-main/hooks";
+@source "C:/Users/user/Downloads/sterlinglamslogistics-main/sterlinglamslogistics-main/lib";
+@source "C:/Users/user/Downloads/sterlinglamslogistics-main/sterlinglamslogistics-main/app";
 
 @custom-variant dark (&:is(.dark *));
 
@@ -143,6 +143,28 @@
   }
   body {
     @apply bg-background text-foreground;
+    overscroll-behavior: none;
+  }
+  /* Prevent iOS bounce scroll at the root */
+  html {
+    overscroll-behavior: none;
+  }
+}
+
+/* Remove hover styles on touch-only devices */
+@media (hover: none) and (pointer: coarse) {
+  :root {
+    --no-hover: 1;
+  }
+  a:hover,
+  button:hover {
+    opacity: 1;
+  }
+  /* Prevent sticky :hover states after tap on mobile */
+  .hover\:bg-accent:hover,
+  .hover\:bg-primary\/90:hover,
+  .hover\:bg-secondary\/80:hover {
+    background-color: inherit;
   }
 }
 
