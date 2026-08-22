@@ -17,7 +17,7 @@ import {
   AlertTriangle,
 } from "lucide-react"
 import { subscribeDriversRealtime, subscribeOrdersRealtime } from "@/lib/firestore"
-import { loadGoogleMaps } from "@/lib/google-maps"
+import { loadGoogleMaps, onGoogleMapsAuthFailure } from "@/lib/google-maps"
 import { useAuth } from "@/components/auth-provider"
 import type { Driver, Order } from "@/lib/data"
 
@@ -393,6 +393,7 @@ export default function RoutesPage() {
   // ── Init Google Map ── (re-run when isLoading changes so we catch the container after it mounts)
   useEffect(() => {
     let mounted = true
+    let unsubscribeAuthFailure: (() => void) | null = null
 
     async function initMap() {
       if (!mapContainerRef.current || mapRef.current) return
@@ -407,6 +408,15 @@ export default function RoutesPage() {
         if (mounted) setMapError(err instanceof Error ? err.message : "Google Maps failed to load.")
         return
       }
+      // Google can still reject the key after the script loads, replacing the
+      // map with its own error panel. Subscribe so we explain it instead.
+      unsubscribeAuthFailure = onGoogleMapsAuthFailure(() => {
+        if (mounted) {
+          setMapError(
+            "Google rejected this API key. Check that billing is enabled, the Maps JavaScript API is turned on, and any referrer restrictions allow this domain."
+          )
+        }
+      })
       if (!mounted || !mapContainerRef.current) return
 
       const map = new google.maps.Map(mapContainerRef.current, {
@@ -431,6 +441,7 @@ export default function RoutesPage() {
 
     return () => {
       mounted = false
+      unsubscribeAuthFailure?.()
       orderMarkersRef.current.forEach((m) => m.setMap(null))
       orderMarkersRef.current = []
       for (const [, m] of driverMarkersMapRef.current) m.setMap(null)

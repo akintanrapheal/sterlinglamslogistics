@@ -28,6 +28,19 @@ function corsHeaders(origin: string | null): Record<string, string> {
   }
 }
 
+/**
+ * API paths the bundled APK calls cross-origin from its WebView.
+ *
+ * /api/driver/* is the bulk of it, but /api/maps-key sits outside that prefix
+ * and was therefore served without CORS headers. The WebView blocked the
+ * response, the Maps loader fell back to an empty build-time key, and Google
+ * rendered a watermarked "development purposes only" map with NoApiKeys — a
+ * failure that looks exactly like a billing problem and is not one.
+ */
+function needsCors(pathname: string): boolean {
+  return pathname.startsWith("/api/driver/") || pathname === "/api/maps-key"
+}
+
 function isAssetOrApi(pathname: string): boolean {
   return (
     pathname.startsWith("/_next") ||
@@ -40,12 +53,12 @@ function isAssetOrApi(pathname: string): boolean {
 export function proxy(request: NextRequest) {
   const { pathname, searchParams } = request.nextUrl
 
-  // ── CORS for the driver API ────────────────────────────────────────────
-  // The bundled driver-mobile-2 APK calls /api/driver/* from its WebView
-  // origin (https://localhost), so each call triggers CORS. Handle the
-  // preflight here, and tack the response headers onto the eventual
-  // route-handler reply for non-OPTIONS requests.
-  if (pathname.startsWith("/api/driver/")) {
+  // ── CORS for the endpoints the APK calls ───────────────────────────────
+  // The bundled driver-mobile-2 APK calls these from its WebView origin
+  // (https://localhost), so each call triggers CORS. Handle the preflight
+  // here, and tack the response headers onto the eventual route-handler
+  // reply for non-OPTIONS requests. See needsCors for which paths qualify.
+  if (needsCors(pathname)) {
     const headers = corsHeaders(request.headers.get("origin"))
     if (request.method === "OPTIONS") {
       return new NextResponse(null, { status: 204, headers })
