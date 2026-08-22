@@ -129,7 +129,10 @@
     // Try to bounce back to the live app whenever a connection looks up.
     // Three triggers: (1) the browser fires `online`, (2) the Retry button,
     // (3) a periodic background check (every 5s, lightweight HEAD probe).
-    var TARGET = "https://sterlinglamslogistics.com/driver";
+    // Vercel origin — must match capacitor.config.ts's baseUrl, or the
+    // reconnect probe would bounce the driver back to the apex that was
+    // 403ing and put them straight back on this screen.
+    var TARGET = "https://sterlinglamslogistics.vercel.app/driver";
     var retryBtn = document.getElementById("retryBtn");
     var statusText = document.getElementById("statusText");
     var dot = document.getElementById("dot");

@@ -1,7 +1,21 @@
 import { getToken, clearSession } from "./storage"
 import { router } from "expo-router"
 
-const BASE = "https://sterlinglamslogistics.com"
+/**
+ * API origin for the driver app.
+ *
+ * Points at Vercel rather than the apex domain. The apex is served by
+ * Hostinger, which intermittently returns its own LiteSpeed 403 ("Access to
+ * this resource on the server is denied!") for minutes at a time — long
+ * enough to block a driver mid-round. Vercel serves the same app without
+ * that edge in front of it.
+ *
+ * Exported so every call site shares one origin; the login and location
+ * calls used to hardcode the apex separately and would have been missed.
+ */
+export const API_BASE = "https://sterlinglamslogistics.vercel.app"
+
+const BASE = API_BASE
 const TIMEOUT_MS = 12_000
 
 let _redirecting = false

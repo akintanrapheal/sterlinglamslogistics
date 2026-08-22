@@ -6,6 +6,7 @@ import {
 } from "react-native"
 import { router } from "expo-router"
 import { useDriver } from "@/context/DriverContext"
+import { API_BASE } from "@/lib/api"
 
 export default function LoginScreen() {
   const { session, loadingSession, login } = useDriver()
@@ -27,7 +28,10 @@ export default function LoginScreen() {
     setError("")
     setLoading(true)
     try {
-      const res = await fetch("https://sterlinglamslogistics.com/api/driver/login", {
+      // Login predates having a token, so it can't use driverFetch — but it
+      // must use the same origin, or a driver could fail to sign in at all
+      // while the apex is returning 403s.
+      const res = await fetch(`${API_BASE}/api/driver/login`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ phone: phone.trim(), password }),

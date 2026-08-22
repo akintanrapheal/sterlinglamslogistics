@@ -23,10 +23,23 @@ export function DriverSWRegister() {
       return
     }
 
-    // Scope is /driver/ so the SW only governs driver pages and never
-    // intercepts admin / marketing routes.
+    // Where the app is mounted differs by build, and registering the wrong
+    // one silently disables offline support entirely:
+    //
+    //   web APK-less     served under /driver  -> /driver/sw.js, scope /driver/
+    //   driver-mobile-2  static export at root -> /sw.js,        scope /
+    //
+    // The export has no /driver segment at all, so the old fixed
+    // "/driver/sw.js" 404'd there, the registration rejected, and the catch
+    // below swallowed it — the APK had no offline caching and no error to
+    // show for it. A scope of /driver/ also could never have controlled
+    // pages sitting at /dashboard.
+    const underDriverPath = window.location.pathname.startsWith("/driver")
+    const swUrl = underDriverPath ? "/driver/sw.js" : "/sw.js"
+    const scope = underDriverPath ? "/driver/" : "/"
+
     navigator.serviceWorker
-      .register("/driver/sw.js", { scope: "/driver/" })
+      .register(swUrl, { scope })
       .then((reg) => {
         // Trigger a one-shot precache pass once a controller is active.
         // The SW handler walks PRECACHE_ROUTES and stuffs each one into
