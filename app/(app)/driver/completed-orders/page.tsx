@@ -1,10 +1,13 @@
 "use client"
 
-import { useEffect, useMemo, useState } from "react"
+import { useEffect, useState } from "react"
 import { useRouter } from "next/navigation"
 import { ArrowLeft, Loader2, Package } from "lucide-react"
 import { Badge } from "@/components/ui/badge"
+import { driverFetch } from "@/lib/driver-client"
 import { parseFirestoreDate } from "@/lib/order-utils"
+import { toast } from "@/hooks/use-toast"
+import type { Order } from "@/lib/data"
 import { formatCurrency } from "@/lib/data"
 import { useDriver } from "@/components/driver-context"
 import { cn } from "@/lib/utils"
@@ -28,35 +31,44 @@ type Tab = "today" | "yesterday" | "all"
 
 export default function DriverCompletedOrdersPage() {
   const router = useRouter()
-  const { session, orders: allOrders, refreshOrders, loadingOrders } = useDriver()
+  const { session } = useDriver()
   const [tab, setTab] = useState<Tab>("today")
+  const [orders, setOrders] = useState<Order[]>([])
+  const [loading, setLoading] = useState(true)
 
-  // Derived from the list the context already holds, so the screen paints on
-  // the first frame. It used to refetch /api/driver/orders in full and sit on
-  // a spinner just to filter for delivered — data already in memory, fetched
-  // again on every visit to this tab.
-  const orders = useMemo(
-    () =>
-      allOrders
-        .filter((order) => order.status === "delivered")
-        .sort((a, b) => {
-          const aTime = parseFirestoreDate(a.deliveredAt)?.getTime() ?? 0
-          const bTime = parseFirestoreDate(b.deliveredAt)?.getTime() ?? 0
-          return bTime - aTime
-        }),
-    [allOrders],
-  )
-
-  // Revalidate in the background. Deliberately not awaited and not tied to a
-  // spinner: whatever is already on screen stays put while it runs.
+  // Fetches its own history rather than reading the context list.
+  //
+  // The context now holds only active work: the polled endpoint returns
+  // scope=active, because fetching every order a driver had ever completed
+  // on a timer is what exhausted the Firestore read quota. Delivered orders
+  // therefore aren't in it, and this screen has to ask for them — once, on
+  // open, with the bounded scope=all rather than on any interval.
   useEffect(() => {
-    if (session) void refreshOrders()
-    // Once per mount — refreshOrders is stable per session.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    if (!session) return
+    let cancelled = false
+    setLoading(true)
+    driverFetch(`/api/driver/orders?driverId=${encodeURIComponent(session.id)}&scope=all`, {})
+      .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
+      .then((d: { orders?: Order[] }) => {
+        if (cancelled) return
+        setOrders(
+          (d.orders ?? [])
+            .filter((order) => order.status === "delivered")
+            .sort((a, b) => {
+              const aTime = parseFirestoreDate(a.deliveredAt)?.getTime() ?? 0
+              const bTime = parseFirestoreDate(b.deliveredAt)?.getTime() ?? 0
+              return bTime - aTime
+            }),
+        )
+        setLoading(false)
+      })
+      .catch(() => {
+        if (cancelled) return
+        setLoading(false)
+        toast({ title: "Couldn't load completed orders", variant: "destructive" })
+      })
+    return () => { cancelled = true }
   }, [session])
-
-  // Only block on the very first load, when there is genuinely nothing to show.
-  const loading = loadingOrders && allOrders.length === 0
 
   const todayOrders = orders.filter((o) => isToday(o.deliveredAt))
   const yesterdayOrders = orders.filter((o) => isYesterday(o.deliveredAt))
