@@ -20,8 +20,18 @@ import type { CapacitorConfig } from "@capacitor/cli"
  * 403s this app's requests (custom UA below trips its bot rules).
  */
 const config: CapacitorConfig = {
-  appId: "com.sterlinglams.driver2",
-  appName: "Sterlin Driver 2",
+  // Must match applicationId in android/app/build.gradle — cap sync does not
+  // rewrite that once the Android project is scaffolded, so a mismatch is
+  // silent: the APK installs under build.gradle's id while this file claims
+  // another. It read "com.sterlinglams.driver2" while every build actually
+  // installed as "com.sterlinglams.driver", which made it look like the old
+  // app was still in use when it had in fact been replaced.
+  //
+  // Kept on the original id deliberately, now that driver-mobile has been
+  // removed and this is the only driver app: existing installs upgrade in
+  // place and drivers keep their session and any queued deliveries.
+  appId: "com.sterlinglams.driver",
+  appName: "Sterlin Driver",
   webDir: "www",
   server: {
     androidScheme: "https",
