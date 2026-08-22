@@ -38,7 +38,20 @@ param(
     #
     # To go back to the Cloudflare-fronted apex:
     #   .\build.ps1 -ApiBase "https://sterlinglamslogistics.com"
-    [string]$ApiBase = "https://sterlinglamslogistics.vercel.app"
+    [string]$ApiBase = "https://sterlinglamslogistics.vercel.app",
+
+    # Vector Map ID from Google Cloud Console. Two-finger rotate and tilt only
+    # work on a vector map; without an ID Google serves a raster map, where
+    # rotateControl affects satellite view only. The map reads this at build
+    # time, so setting it on Vercel does nothing for the APK — it has to be
+    # baked in here.
+    #   .\build.ps1 -MapId "abc123def456"
+    [string]$MapId = $env:NEXT_PUBLIC_GOOGLE_MAPS_MAP_ID,
+
+    # Optional fallback Maps key compiled into the bundle. Normally the app
+    # fetches the key from /api/maps-key at runtime, so this is only needed if
+    # you want the map to work before that call resolves.
+    [string]$MapsKey = $env:NEXT_PUBLIC_GOOGLE_MAPS_KEY
 )
 
 $ErrorActionPreference = "Stop"
@@ -51,6 +64,7 @@ Write-Host "==> driver-mobile-2 build" -ForegroundColor Cyan
 Write-Host "    main project:  $mainRoot"
 Write-Host "    sub-project:   $srcRoot"
 Write-Host "    API base URL:  $ApiBase"
+Write-Host "    Maps Map ID:   $(if ($MapId) { $MapId } else { '(none - raster map, finger rotate disabled)' })"
 Write-Host ""
 
 # 1. Sync source files from main project. We only copy what the driver
@@ -189,6 +203,11 @@ try {
     Write-Host ""
     Write-Host "[4/5] Running next build (output: 'export')..." -ForegroundColor Yellow
     $env:NEXT_PUBLIC_API_BASE_URL = $ApiBase
+    # Only set when supplied: an empty NEXT_PUBLIC_GOOGLE_MAPS_MAP_ID would be
+    # baked in as the string "undefined" rather than being absent, and the map
+    # would then request a Map ID that doesn't exist.
+    if ($MapId)   { $env:NEXT_PUBLIC_GOOGLE_MAPS_MAP_ID = $MapId }
+    if ($MapsKey) { $env:NEXT_PUBLIC_GOOGLE_MAPS_KEY = $MapsKey }
     & pnpm build
     if ($LASTEXITCODE -ne 0) { throw "next build failed" }
 } finally {

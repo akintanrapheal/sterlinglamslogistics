@@ -83,6 +83,17 @@ export default function DriverMapPage() {
         zoomControl: true,
         rotateControl: true,
         gestureHandling: "greedy",
+        // Two-finger rotate and tilt are only honoured on a vector map, which
+        // requires mapId above. On a raster map these are ignored and the
+        // rotate control affects satellite view only. headingInteractionEnabled
+        // and tiltInteractionEnabled must be opted into explicitly — a vector
+        // map alone still ignores the gestures without them.
+        ...(mapId
+          ? {
+              headingInteractionEnabled: true,
+              tiltInteractionEnabled: true,
+            }
+          : {}),
         // Styles are ignored when mapId is set (Cloud-based styling takes over)
         ...(mapId ? {} : {
           styles: [
