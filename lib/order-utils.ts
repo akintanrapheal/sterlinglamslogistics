@@ -6,14 +6,60 @@ function esc(text: string): string {
   return el.innerHTML
 }
 
+/**
+ * Coerce the several shapes a Firestore date arrives in into a Date.
+ *
+ * The shapes matter because they come from different paths:
+ *
+ *   { seconds }            client SDK Timestamp, JSON-serialised
+ *   { _seconds }           ADMIN SDK Timestamp, JSON-serialised — the admin
+ *                          Timestamp keeps its fields private, so JSON.stringify
+ *                          emits _seconds/_nanoseconds with underscores. Every
+ *                          /api/driver/* route uses adminDb, so this is the
+ *                          shape the driver app actually receives, and missing
+ *                          it made deliveredAt parse as null: the Today and
+ *                          Yesterday tabs were always empty and "All" sorted
+ *                          arbitrarily because every key fell back to 0.
+ *   "2026-08-22T…"         ISO string — what any Date becomes once it has been
+ *                          through JSON, including via the offline order cache.
+ *   1755848820000          epoch milliseconds (or seconds, disambiguated below)
+ *   { toDate() }           a live Timestamp instance
+ */
 export function parseFirestoreDate(value: unknown): Date | null {
   if (!value) return null
-  if (value instanceof Date) return value
-  if (typeof value === "object" && value !== null) {
-    const maybeObj = value as { toDate?: () => Date; seconds?: number }
-    if (typeof maybeObj.toDate === "function") return maybeObj.toDate()
-    if (typeof maybeObj.seconds === "number") return new Date(maybeObj.seconds * 1000)
+  if (value instanceof Date) return Number.isNaN(value.getTime()) ? null : value
+
+  if (typeof value === "string") {
+    const parsed = new Date(value)
+    return Number.isNaN(parsed.getTime()) ? null : parsed
   }
+
+  if (typeof value === "number") {
+    // Anything below this is implausible as milliseconds (it would be 1970),
+    // so treat it as seconds instead.
+    const ms = value < 1e11 ? value * 1000 : value
+    const parsed = new Date(ms)
+    return Number.isNaN(parsed.getTime()) ? null : parsed
+  }
+
+  if (typeof value === "object") {
+    const obj = value as {
+      toDate?: () => Date
+      seconds?: number
+      _seconds?: number
+    }
+    if (typeof obj.toDate === "function") {
+      try {
+        const d = obj.toDate()
+        return d instanceof Date && !Number.isNaN(d.getTime()) ? d : null
+      } catch {
+        return null
+      }
+    }
+    const seconds = typeof obj.seconds === "number" ? obj.seconds : obj._seconds
+    if (typeof seconds === "number") return new Date(seconds * 1000)
+  }
+
   return null
 }
 

@@ -13,6 +13,21 @@ let _redirectingToLogin = false
  */
 const API_BASE = (process.env.NEXT_PUBLIC_API_BASE_URL ?? "").replace(/\/$/, "")
 
+/**
+ * Absolute URL for an API path, for callers that use plain fetch rather than
+ * driverFetch. In a same-origin web build this returns the path untouched; in
+ * the static-export APK it prefixes the baked-in origin.
+ *
+ * Exported because any relative "/api/..." fetch outside this module silently
+ * breaks inside the APK — the WebView origin (https://localhost) serves the
+ * bundled UI and nothing else, so the request 404s rather than erroring
+ * obviously.
+ */
+export function apiUrl(path: string): string {
+  if (!API_BASE || !path.startsWith("/")) return path
+  return `${API_BASE}${path}`
+}
+
 function resolveUrl(input: RequestInfo | URL): RequestInfo | URL {
   if (!API_BASE) return input
   if (typeof input === "string") {

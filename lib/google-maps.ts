@@ -1,5 +1,7 @@
 /** Shared Google Maps JavaScript API loader (singleton) */
 
+import { apiUrl } from "@/lib/driver-client"
+
 const ENV_API_KEY = process.env.NEXT_PUBLIC_GOOGLE_MAPS_KEY ?? ""
 
 let loadPromise: Promise<typeof google.maps> | null = null
@@ -15,7 +17,12 @@ let activeKey = ENV_API_KEY
  */
 async function resolveApiKey(): Promise<string> {
   try {
-    const res = await fetch("/api/maps-key")
+    // apiUrl, not a bare "/api/maps-key". The static-export APK runs from
+    // https://localhost, which serves the bundled UI and no API at all, so the
+    // relative form 404'd and fell through to ENV_API_KEY — and build.ps1 sets
+    // NEXT_PUBLIC_API_BASE_URL but not NEXT_PUBLIC_GOOGLE_MAPS_KEY, so that was
+    // empty too. Maps then loaded with "key=" and rendered a blank white page.
+    const res = await fetch(apiUrl("/api/maps-key"))
     if (res.ok) {
       const data = (await res.json()) as { key?: string }
       if (data.key?.trim()) return data.key.trim()
