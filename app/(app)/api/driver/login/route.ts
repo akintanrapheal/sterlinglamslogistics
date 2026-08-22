@@ -90,6 +90,21 @@ export async function POST(req: Request) {
       return response
     }
 
+    // The response deliberately stays vague — splitting "no such phone" from
+    // "wrong password" would let anyone enumerate which numbers are drivers.
+    // The server log is not public, so record which it was: without this a
+    // failed login is indistinguishable from a driver record that lost its
+    // password field or never came back after a data restore, and the only
+    // signal anyone has is a driver insisting the credentials are correct.
+    log.warn(
+      {
+        normalizedInput,
+        matchedDrivers: driverDocs.length,
+        driversWithoutPassword: driverDocs.filter((d) => !(d.data() as { password?: string }).password).length,
+        reason: driverDocs.length === 0 ? "no driver matched phone" : "password mismatch",
+      },
+      "Driver login rejected",
+    )
     return NextResponse.json({ ok: false, error: "Invalid credentials." }, { status: 401 })
   } catch (error) {
     log.error({ error }, "Driver login failed")
