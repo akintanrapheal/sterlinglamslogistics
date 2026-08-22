@@ -174,6 +174,10 @@ const DEFAULT_HUB_COORDS: LatLng = { lat: 6.4642667, lng: 3.5554814 }
 export function getHubCoordinates(): LatLng {
   const lat = Number(process.env.NEXT_PUBLIC_HUB_LAT)
   const lng = Number(process.env.NEXT_PUBLIC_HUB_LNG)
-  if (!Number.isNaN(lat) && !Number.isNaN(lng)) return { lat, lng }
-  return DEFAULT_HUB_COORDS
+  // Number("") is 0, not NaN, so an env var that is present but blank used to
+  // pass the NaN check and place the hub at 0,0 — in the Gulf of Guinea, about
+  // 700km offshore. Require a real coordinate before trusting it.
+  const usable =
+    Number.isFinite(lat) && Number.isFinite(lng) && (lat !== 0 || lng !== 0)
+  return usable ? { lat, lng } : DEFAULT_HUB_COORDS
 }
