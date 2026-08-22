@@ -14,6 +14,7 @@ import {
   ChevronUp,
   ChevronDown,
   Check,
+  AlertTriangle,
 } from "lucide-react"
 import { subscribeDriversRealtime, subscribeOrdersRealtime } from "@/lib/firestore"
 import { loadGoogleMaps } from "@/lib/google-maps"
@@ -121,6 +122,9 @@ export default function RoutesPage() {
 
   // Geocode order addresses – use stored lat/lng instantly, only geocode missing ones
   const jsGeocoderRef = useRef<google.maps.Geocoder | null>(null)
+  // Set when the Maps JS API can't load, so the map panel can explain itself
+  // instead of sitting blank or taking the page down.
+  const [mapError, setMapError] = useState<string | null>(null)
   const jsGeocachRef = useRef<Map<string, LatLng>>(new Map())
 
   useEffect(() => {
@@ -153,7 +157,13 @@ export default function RoutesPage() {
     if (needsGeocode.length === 0) return
 
     async function geocodeMissing() {
-      await loadGoogleMaps()
+      try {
+        await loadGoogleMaps()
+      } catch {
+        // Same reasoning as initMap: orders without coordinates simply stay
+        // unplotted rather than crashing the page.
+        return
+      }
       if (!jsGeocoderRef.current) {
         jsGeocoderRef.current = new google.maps.Geocoder()
       }
@@ -386,7 +396,17 @@ export default function RoutesPage() {
 
     async function initMap() {
       if (!mapContainerRef.current || mapRef.current) return
-      await loadGoogleMaps()
+      try {
+        await loadGoogleMaps()
+      } catch (err) {
+        // A failing key must not take the page down with it. This used to be
+        // an uncaught rejection, so deleting the API key in Google Cloud
+        // replaced the whole Routes screen with "Something went wrong" — the
+        // order list, filters and driver panel included, none of which need
+        // the map.
+        if (mounted) setMapError(err instanceof Error ? err.message : "Google Maps failed to load.")
+        return
+      }
       if (!mounted || !mapContainerRef.current) return
 
       const map = new google.maps.Map(mapContainerRef.current, {
@@ -995,6 +1015,20 @@ export default function RoutesPage() {
 
       <section className={`relative overflow-hidden bg-card ${mobileView === "map" ? "flex flex-1 flex-col" : "hidden"} xl:flex xl:flex-1 xl:flex-col`}>
         <div ref={mapContainerRef} className="absolute inset-0" />
+
+        {mapError && (
+          <div className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-3 bg-muted/95 p-6 text-center">
+            <AlertTriangle className="h-8 w-8 text-warning" />
+            <div>
+              <p className="font-semibold">Map unavailable</p>
+              <p className="mt-1 max-w-md text-sm text-muted-foreground">{mapError}</p>
+            </div>
+            <p className="max-w-md text-xs text-muted-foreground">
+              Check the Google Maps key in Settings → Integrations, and that billing is
+              enabled on the Google Cloud project. Orders and drivers below are unaffected.
+            </p>
+          </div>
+        )}
 
         {/* Map overlay controls — top-right */}
         <div className="absolute right-3 top-3 flex flex-col gap-2">
