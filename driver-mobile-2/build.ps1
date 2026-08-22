@@ -78,6 +78,32 @@ foreach ($pair in $dirsToSync) {
 # globals.css from main project's app/
 Copy-Item -Force (Join-Path $mainRoot "app/globals.css") (Join-Path $srcRoot "app/globals.css")
 
+# Repoint Tailwind's @source directives at the main project.
+#
+# Tailwind v4 skips anything matched by .gitignore when scanning for class
+# names, and every tree this script populates under source/ is gitignored
+# precisely because it is generated. So Tailwind saw almost none of the driver
+# UI and silently omitted the utilities only it used: py-3.5 vanished (buttons
+# rendered with no vertical padding and looked squashed), bg-green-600 and
+# bg-emerald-700 vanished (white text on a transparent button — the Route
+# Options sheet appeared blank), along with space-y-3 and border-yellow-400.
+# Nothing errors; the classes just aren't in the stylesheet.
+#
+# The @source paths in app/globals.css are relative and correct for the main
+# project, but resolve into the ignored copies once the file lands in source/.
+# Rewrite them to absolute paths back at the main project, whose tracked files
+# contain exactly the same class names.
+$globalsPath = Join-Path $srcRoot "app/globals.css"
+$mainForCss  = ($mainRoot -replace '\\', '/').TrimEnd('/')
+$css = Get-Content $globalsPath -Raw
+$css = [regex]::Replace(
+    $css,
+    '@source\s+"\.\./(components|hooks|lib|app)"\s*;',
+    { param($m) "@source `"$mainForCss/$($m.Groups[1].Value)`";" }
+)
+Set-Content -Path $globalsPath -Value $css -Encoding utf8
+Write-Host "    (@source repointed at $mainForCss so Tailwind scans tracked files)"
+
 # 2. Adapt the driver routes. Main project lays them out as:
 #    app/(app)/driver/page.tsx              -> source/app/page.tsx        (login)
 #    app/(app)/driver/dashboard/page.tsx    -> source/app/dashboard/page.tsx
