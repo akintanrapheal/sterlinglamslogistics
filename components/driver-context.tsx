@@ -68,11 +68,20 @@ const RETRY_MAX_MS = 5 * 60_000
 /**
  * How often to re-read the order list while a driver is online.
  *
- * 20s keeps a newly assigned job visible quickly without being wasteful:
- * against the 120/min per-driver API budget this costs 3/min, alongside the
- * 6/min profile poll.
+ * Each poll is a Firestore query billed per document returned, so the
+ * interval is a direct multiplier on quota. At 45s an online driver costs
+ * ~1,900 polls/day against their active orders only, rather than the ~4,300
+ * full-history reads that exhausted a free-tier project. Still well inside
+ * the window where dispatch expects a newly assigned job to appear.
  */
-const ORDER_POLL_MS = 20_000
+const ORDER_POLL_MS = 45_000
+
+/**
+ * Profile poll. Reads a single document, but at 10s it was 8,640 reads/day
+ * per driver on its own — the largest fixed cost in the app for data that
+ * changes rarely.
+ */
+const PROFILE_POLL_MS = 30_000
 
 const DriverContext = createContext<DriverContextValue | null>(null)
 
@@ -167,7 +176,7 @@ export function DriverProvider({ children }: { children: ReactNode }) {
     }
 
     pollProfile()
-    const id = window.setInterval(pollProfile, 10_000)
+    const id = window.setInterval(pollProfile, PROFILE_POLL_MS)
     return () => { cancelled = true; window.clearInterval(id) }
   }, [session])
 
@@ -408,7 +417,7 @@ export function DriverProvider({ children }: { children: ReactNode }) {
     if (!session) return
     setLoadingOrders(true)
     try {
-      const res = await driverFetch(`/api/driver/orders?driverId=${encodeURIComponent(session.id)}`, {})
+      const res = await driverFetch(`/api/driver/orders?driverId=${encodeURIComponent(session.id)}&scope=active`, {})
       if (!res.ok) {
         // Distinguish the failure modes. "Failed to load deliveries" for
         // everything told the driver nothing about whether to wait, retry, or

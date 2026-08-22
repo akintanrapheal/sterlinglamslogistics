@@ -62,9 +62,11 @@ function getDateRange(filter: string): { start: Date; end: Date } | null {
 
 export default function DriverPerformancePage() {
   const router = useRouter()
-  const { session, driver, loadingSession, setDrawerOpen, orders: allOrders, refreshOrders, loadingOrders } = useDriver()
+  const { session, driver, loadingSession, setDrawerOpen } = useDriver()
   const [filter, setFilter] = useState("this_week")
   const [showDropdown, setShowDropdown] = useState(false)
+  const [allOrders, setAllOrders] = useState<Order[]>([])
+  const [loading, setLoading] = useState(true)
 
   useEffect(() => {
     if (!loadingSession && !session) {
@@ -72,18 +74,25 @@ export default function DriverPerformancePage() {
     }
   }, [loadingSession, session, router])
 
-  // Read the shared order list rather than pulling /api/driver/orders again.
-  // This screen refetched the driver's entire order history on every visit and
-  // held a spinner over the whole page while it did, even though the context
-  // had already loaded exactly that list. Revalidate in the background so the
-  // stats stay current without blanking the screen.
+  // Performance stats are computed over history, which the context no longer
+  // carries: the polled endpoint returns scope=active only, because reading a
+  // driver's whole order history on a timer is what exhausted the Firestore
+  // quota. Fetch the bounded history here instead — once per visit, not on an
+  // interval.
   useEffect(() => {
-    if (session) void refreshOrders()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    if (!session) return
+    let cancelled = false
+    setLoading(true)
+    driverFetch(`/api/driver/orders?driverId=${encodeURIComponent(session.id)}&scope=all`, {})
+      .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
+      .then((d: { orders?: Order[] }) => {
+        if (cancelled) return
+        setAllOrders(d.orders ?? [])
+        setLoading(false)
+      })
+      .catch(() => { if (!cancelled) setLoading(false) })
+    return () => { cancelled = true }
   }, [session])
-
-  // Spinner only when there is genuinely nothing cached to render.
-  const loading = loadingOrders && allOrders.length === 0
 
   // Compute stats based on filter
   const filteredOrders = (() => {
