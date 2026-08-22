@@ -33,7 +33,46 @@ async function resolveApiKey(): Promise<string> {
   return ENV_API_KEY
 }
 
+/**
+ * Set when Google rejects the key *after* the script has loaded.
+ *
+ * This failure mode is invisible to the loader: the script downloads fine and
+ * window.google.maps.Map exists, so loadGoogleMaps resolves and construction
+ * succeeds — then Google paints its own "This page didn't load Google Maps
+ * correctly" panel into the container and logs the real reason to the console.
+ * gm_authFailure is the documented callback for it, and the only way to catch
+ * an invalid key, an unactivated API, a referrer rejection or disabled billing
+ * from application code.
+ */
+let authFailed = false
+const authFailureListeners = new Set<() => void>()
+
+export function onGoogleMapsAuthFailure(listener: () => void): () => void {
+  authFailureListeners.add(listener)
+  // Fire immediately if the failure already happened before this subscriber
+  // mounted — otherwise a late-mounting map panel would never hear about it.
+  if (authFailed) listener()
+  return () => authFailureListeners.delete(listener)
+}
+
+export function googleMapsAuthFailed(): boolean {
+  return authFailed
+}
+
+function installAuthFailureHook(): void {
+  if (typeof window === "undefined") return
+  const w = window as unknown as { gm_authFailure?: () => void }
+  if (w.gm_authFailure) return
+  w.gm_authFailure = () => {
+    authFailed = true
+    // Let the next load re-evaluate: the admin may have just fixed the key.
+    loadPromise = null
+    for (const listener of authFailureListeners) listener()
+  }
+}
+
 export function loadGoogleMaps(): Promise<typeof google.maps> {
+  installAuthFailureHook()
   if (loadPromise) return loadPromise
 
   loadPromise = (async () => {
