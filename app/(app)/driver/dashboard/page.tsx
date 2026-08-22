@@ -361,8 +361,14 @@ export default function DriverDashboard() {
         </div>
       )}
 
-      {/* Orders list */}
-      {loadingOrders ? (
+      {/* Orders list.
+          The spinner is gated on having nothing to show, not merely on
+          loadingOrders. Otherwise every refresh — the map's 15s poll, a
+          pull-to-refresh, or simply reopening the app — replaced a perfectly
+          good list of deliveries with a spinner for the duration of the
+          request, which is the "lazy loading" drivers were seeing even though
+          the orders were already cached on the device. */}
+      {loadingOrders && orders.length === 0 ? (
         <div className="flex justify-center py-12">
           <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
         </div>
