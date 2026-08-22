@@ -62,11 +62,9 @@ function getDateRange(filter: string): { start: Date; end: Date } | null {
 
 export default function DriverPerformancePage() {
   const router = useRouter()
-  const { session, driver, loadingSession, setDrawerOpen } = useDriver()
+  const { session, driver, loadingSession, setDrawerOpen, orders: allOrders, refreshOrders, loadingOrders } = useDriver()
   const [filter, setFilter] = useState("this_week")
   const [showDropdown, setShowDropdown] = useState(false)
-  const [allOrders, setAllOrders] = useState<Order[]>([])
-  const [loading, setLoading] = useState(true)
 
   useEffect(() => {
     if (!loadingSession && !session) {
@@ -74,16 +72,18 @@ export default function DriverPerformancePage() {
     }
   }, [loadingSession, session, router])
 
+  // Read the shared order list rather than pulling /api/driver/orders again.
+  // This screen refetched the driver's entire order history on every visit and
+  // held a spinner over the whole page while it did, even though the context
+  // had already loaded exactly that list. Revalidate in the background so the
+  // stats stay current without blanking the screen.
   useEffect(() => {
-    if (!session) return
-    setLoading(true)
-    driverFetch(`/api/driver/orders?driverId=${encodeURIComponent(session.id)}`, {})
-      .then((r) => r.json())
-      .then((d: { ok: boolean; orders: Order[] }) => {
-        setAllOrders(d.orders ?? [])
-        setLoading(false)
-      })
+    if (session) void refreshOrders()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [session])
+
+  // Spinner only when there is genuinely nothing cached to render.
+  const loading = loadingOrders && allOrders.length === 0
 
   // Compute stats based on filter
   const filteredOrders = (() => {
