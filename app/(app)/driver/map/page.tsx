@@ -9,6 +9,7 @@ import type { Order } from "@/lib/data"
 import { cn } from "@/lib/utils"
 import { loadGoogleMaps, geocodeAddress } from "@/lib/google-maps"
 import { parseFirestoreDate } from "@/lib/order-utils"
+import { getHubCoordinates } from "@/lib/geocode"
 import { buildNavUrl, getNavApp } from "@/lib/nav"
 
 export default function DriverMapPage() {
@@ -75,8 +76,13 @@ export default function DriverMapPage() {
       }
       if (cancelled || !mapContainerRef.current) return
 
-      const hubLat = Number(process.env.NEXT_PUBLIC_HUB_LAT) || 6.4541
-      const hubLng = Number(process.env.NEXT_PUBLIC_HUB_LNG) || 3.4347
+      // Shared helper, not a local literal. This screen used to carry its own
+      // fallback of 6.4541,3.4347 — Lagos Island — while every other caller
+      // and lib/geocode.ts's DEFAULT_HUB_COORDS use 6.4642667,3.5554814, the
+      // actual Ikota/Ajah store. Since build.ps1 doesn't set NEXT_PUBLIC_HUB_*,
+      // the APK always hit that fallback and drew the store ~20km from where
+      // it is, on the wrong side of the city.
+      const { lat: hubLat, lng: hubLng } = getHubCoordinates()
 
       // mapId enables Google Maps' vector renderer, which is what lets
       // two-finger rotate / tilt work on the default roadmap (raster maps

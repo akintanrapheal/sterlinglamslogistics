@@ -51,7 +51,13 @@ param(
     # Optional fallback Maps key compiled into the bundle. Normally the app
     # fetches the key from /api/maps-key at runtime, so this is only needed if
     # you want the map to work before that call resolves.
-    [string]$MapsKey = $env:NEXT_PUBLIC_GOOGLE_MAPS_KEY
+    [string]$MapsKey = $env:NEXT_PUBLIC_GOOGLE_MAPS_KEY,
+
+    # Store/hub coordinates. Read at build time like the two above, so leaving
+    # them unset means the APK silently falls back to the compiled-in default
+    # rather than whatever the web deployment is configured with.
+    [string]$HubLat = $env:NEXT_PUBLIC_HUB_LAT,
+    [string]$HubLng = $env:NEXT_PUBLIC_HUB_LNG
 )
 
 $ErrorActionPreference = "Stop"
@@ -208,6 +214,8 @@ try {
     # would then request a Map ID that doesn't exist.
     if ($MapId)   { $env:NEXT_PUBLIC_GOOGLE_MAPS_MAP_ID = $MapId }
     if ($MapsKey) { $env:NEXT_PUBLIC_GOOGLE_MAPS_KEY = $MapsKey }
+    if ($HubLat)  { $env:NEXT_PUBLIC_HUB_LAT = $HubLat }
+    if ($HubLng)  { $env:NEXT_PUBLIC_HUB_LNG = $HubLng }
     & pnpm build
     if ($LASTEXITCODE -ne 0) { throw "next build failed" }
 } finally {
