@@ -42,10 +42,14 @@ export default function DeliveryCompletionPage() {
   const searchParams = useSearchParams()
   const orderId = searchParams.get("id") ?? ""
   const router = useRouter()
-  const { session, liveGps, patchOrder } = useDriver()
+  const { session, liveGps, patchOrder, orders } = useDriver()
   const canvasRef = useRef<HTMLCanvasElement>(null)
-  const [order, setOrder] = useState<Order | null>(null)
-  const [loading, setLoading] = useState(true)
+  // Seed from the already-loaded list so the proof-of-delivery screen opens
+  // straight onto the form. Waiting on a refetch here was the worst of these
+  // stalls: it sits between the driver and the customer at the door.
+  const cachedOrder = orders.find((o) => o.id === orderId) ?? null
+  const [order, setOrder] = useState<Order | null>(cachedOrder)
+  const [loading, setLoading] = useState(!cachedOrder)
   const [submitting, setSubmitting] = useState(false)
   const [notes, setNotes] = useState("")
   const [signerName, setSignerName] = useState("")
@@ -69,12 +73,18 @@ export default function DeliveryCompletionPage() {
   const streamRef = useRef<MediaStream | null>(null)
 
   useEffect(() => {
+    let cancelled = false
     driverFetch(`/api/driver/orders/${encodeURIComponent(orderId)}`, {})
       .then((r) => r.json())
       .then((d: { ok: boolean; order?: Order }) => {
-        setOrder(d.order ?? null)
+        if (cancelled) return
+        // Don't clobber a usable cached order with null on a failed refresh —
+        // that would strand the driver on "Order not found" at the doorstep.
+        if (d.order) setOrder(d.order)
         setLoading(false)
       })
+      .catch(() => { if (!cancelled) setLoading(false) })
+    return () => { cancelled = true }
   }, [orderId])
 
   // Always stop the camera stream when the component unmounts

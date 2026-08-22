@@ -54,18 +54,36 @@ export default function OrderDetailPage() {
   const searchParams = useSearchParams()
   const orderId = searchParams.get("id") ?? ""
   const router = useRouter()
-  const { liveGps, driver } = useDriver()
-  const [order, setOrder] = useState<Order | null>(null)
-  const [loading, setLoading] = useState(true)
+  const { liveGps, driver, orders } = useDriver()
+  // Seed from the list the dashboard already loaded, so tapping an order
+  // renders its details immediately instead of showing a spinner while
+  // refetching a record the app is holding in memory.
+  const cached = useMemo(() => orders.find((o) => o.id === orderId) ?? null, [orders, orderId])
+  const [order, setOrder] = useState<Order | null>(cached)
+  const [loading, setLoading] = useState(!cached)
 
   useEffect(() => {
+    // Still fetch: the detail endpoint can carry fields the list omits, and
+    // the record may have changed. But only block on it when there was no
+    // cached copy to show in the meantime.
+    let cancelled = false
     driverFetch(`/api/driver/orders/${encodeURIComponent(orderId)}`, {})
       .then((r) => r.json())
       .then((d: { ok: boolean; order?: Order }) => {
-        setOrder(d.order ?? null)
+        if (cancelled) return
+        // Keep the cached record if the refresh comes back empty, rather than
+        // replacing a usable screen with "Order not found".
+        if (d.order) setOrder(d.order)
         setLoading(false)
       })
+      .catch(() => { if (!cancelled) setLoading(false) })
+    return () => { cancelled = true }
   }, [orderId])
+
+  // A later context refresh (poll, pull-to-refresh) should flow through too.
+  useEffect(() => {
+    if (cached) setOrder((prev) => prev ?? cached)
+  }, [cached])
 
   // ETA: distance from driver GPS to order coordinates ÷ 25 km/h (avg Lagos speed)
   const etaMs = useMemo(() => {

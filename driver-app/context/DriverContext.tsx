@@ -15,7 +15,7 @@ import {
   getPreferences, type Preferences,
   saveOnlineStatus, getOnlineStatus,
 } from "@/lib/storage"
-import { driverFetch, clearTokenCache } from "@/lib/api"
+import { driverFetch, clearTokenCache, API_BASE } from "@/lib/api"
 import { registerForPushNotifications, showLocalNotification } from "@/lib/notifications"
 import type { Driver, DriverSession, Order } from "@/lib/types"
 
@@ -37,7 +37,9 @@ TaskManager.defineTask(BG_LOCATION_TASK, async ({ data, error }: TaskManager.Tas
     if (!token || !sessionRaw) return
     const session = JSON.parse(sessionRaw) as { id?: string }
     if (!session?.id) return
-    await fetch("https://sterlinglamslogistics.com/api/driver/location", {
+    // Background task — can't use driverFetch (it redirects on 401), but must
+    // share its origin, or location pings would keep hitting the apex.
+    await fetch(`${API_BASE}/api/driver/location`, {
       method: "POST",
       headers: { "Content-Type": "application/json", "X-Driver-Token": token },
       body: JSON.stringify({ driverId: session.id, lat: loc.coords.latitude, lng: loc.coords.longitude }),

@@ -1,14 +1,11 @@
 "use client"
 
-import { useEffect, useState } from "react"
+import { useEffect, useMemo, useState } from "react"
 import { useRouter } from "next/navigation"
 import { ArrowLeft, Loader2, Package } from "lucide-react"
 import { Badge } from "@/components/ui/badge"
-import { driverFetch } from "@/lib/driver-client"
 import { parseFirestoreDate } from "@/lib/order-utils"
-import type { Order } from "@/lib/data"
 import { formatCurrency } from "@/lib/data"
-import { toast } from "@/hooks/use-toast"
 import { useDriver } from "@/components/driver-context"
 import { cn } from "@/lib/utils"
 
@@ -31,36 +28,35 @@ type Tab = "today" | "yesterday" | "all"
 
 export default function DriverCompletedOrdersPage() {
   const router = useRouter()
-  const { session } = useDriver()
-  const [loading, setLoading] = useState(true)
-  const [orders, setOrders] = useState<Order[]>([])
+  const { session, orders: allOrders, refreshOrders, loadingOrders } = useDriver()
   const [tab, setTab] = useState<Tab>("today")
 
-  useEffect(() => {
-    async function loadCompletedOrders() {
-      if (!session) return
-      setLoading(true)
-      try {
-        const res = await driverFetch(`/api/driver/orders?driverId=${encodeURIComponent(session.id)}`, {})
-        if (!res.ok) throw new Error("Failed to load orders")
-        const { orders: allOrders } = (await res.json()) as { ok: boolean; orders: Order[] }
-        const completed = allOrders
-          .filter((order) => order.status === "delivered")
-          .sort((a, b) => {
-            const aTime = parseFirestoreDate(a.deliveredAt)?.getTime() ?? 0
-            const bTime = parseFirestoreDate(b.deliveredAt)?.getTime() ?? 0
-            return bTime - aTime
-          })
-        setOrders(completed)
-      } catch {
-        toast({ title: "Error", description: "Failed to load completed orders.", variant: "destructive" })
-      } finally {
-        setLoading(false)
-      }
-    }
+  // Derived from the list the context already holds, so the screen paints on
+  // the first frame. It used to refetch /api/driver/orders in full and sit on
+  // a spinner just to filter for delivered — data already in memory, fetched
+  // again on every visit to this tab.
+  const orders = useMemo(
+    () =>
+      allOrders
+        .filter((order) => order.status === "delivered")
+        .sort((a, b) => {
+          const aTime = parseFirestoreDate(a.deliveredAt)?.getTime() ?? 0
+          const bTime = parseFirestoreDate(b.deliveredAt)?.getTime() ?? 0
+          return bTime - aTime
+        }),
+    [allOrders],
+  )
 
-    loadCompletedOrders()
+  // Revalidate in the background. Deliberately not awaited and not tied to a
+  // spinner: whatever is already on screen stays put while it runs.
+  useEffect(() => {
+    if (session) void refreshOrders()
+    // Once per mount — refreshOrders is stable per session.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [session])
+
+  // Only block on the very first load, when there is genuinely nothing to show.
+  const loading = loadingOrders && allOrders.length === 0
 
   const todayOrders = orders.filter((o) => isToday(o.deliveredAt))
   const yesterdayOrders = orders.filter((o) => isYesterday(o.deliveredAt))

@@ -8,6 +8,7 @@ import { toast } from "@/hooks/use-toast"
 import { driverFetch, clearDriverToken } from "@/lib/driver-client"
 import { getPendingDeliveries, removePendingDelivery, pendingDeliveryCount as getPendingCount } from "@/lib/delivery-queue"
 import { getPendingStatusUpdates, removeStatusUpdate, pendingStatusCount } from "@/lib/status-queue"
+import { loadCachedOrders, saveCachedOrders, clearCachedOrders } from "@/lib/order-cache"
 
 interface DriverSession {
   id: string
@@ -347,9 +348,27 @@ export function DriverProvider({ children }: { children: ReactNode }) {
     }
   }, [])
 
+  // Restore the last-known round as soon as the session is known, before any
+  // network call. With no signal this is the difference between the driver
+  // seeing their deliveries and seeing an empty list.
+  useEffect(() => {
+    if (!session) return
+    const cached = loadCachedOrders(session.id)
+    if (cached.length > 0) {
+      // Only seed — never overwrite a list already refreshed from the server.
+      setOrders((prev) => (prev.length > 0 ? prev : cached))
+    }
+  }, [session])
+
   const patchOrder = useCallback((orderId: string, changes: Partial<Order>) => {
-    setOrders((prev) => prev.map((o) => (o.id === orderId ? { ...o, ...changes } : o)))
-  }, [])
+    setOrders((prev) => {
+      const next = prev.map((o) => (o.id === orderId ? { ...o, ...changes } : o))
+      // Persist optimistic changes too, so a status advanced offline survives
+      // the app being killed before it syncs.
+      if (session) saveCachedOrders(session.id, next)
+      return next
+    })
+  }, [session])
 
   const refreshOrders = useCallback(async () => {
     if (!session) return
@@ -400,6 +419,7 @@ export function DriverProvider({ children }: { children: ReactNode }) {
         return (priority[a.status] ?? 5) - (priority[b.status] ?? 5)
       })
       setOrders(sorted)
+      saveCachedOrders(session.id, sorted)
     } catch (err) {
       // Keep whatever is already on screen. Blanking the list on a transient
       // failure would strand a driver mid-shift with no addresses to work
@@ -536,6 +556,10 @@ export function DriverProvider({ children }: { children: ReactNode }) {
 
   function logout() {
     localStorage.removeItem("driverSession")
+    // Drop the cached round as well — handsets get shared between drivers,
+    // and customer names, addresses and phone numbers must not outlive the
+    // session that fetched them.
+    if (session) clearCachedOrders(session.id)
     clearDriverToken()
     setSession(null)
     setDriver(null)

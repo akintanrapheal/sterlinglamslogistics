@@ -20,20 +20,40 @@
 // signal, no cached pages), Capacitor's errorPath kicks in and shows
 // www/offline.html instead of the Android ERR_FAILED screen.
 
-const CACHE_VERSION = 'driver-sw-v2'
+// Bumped from v2: the base-path handling below changes what gets cached
+// and under which keys, so old entries must not be reused.
+const CACHE_VERSION = 'driver-sw-v3'
 const STATIC_CACHE = `${CACHE_VERSION}-static`
 const PAGES_CACHE  = `${CACHE_VERSION}-pages`
 
+/**
+ * Where the driver app is mounted, derived from this worker's own scope.
+ *
+ * On the web it is served under /driver/. In the driver-mobile-2 APK the
+ * static export is served from the root of https://localhost, so the pages
+ * are /dashboard, /map and so on with no /driver segment anywhere.
+ *
+ * Every path below used to be hardcoded to /driver, which meant that inside
+ * the APK the precache list 404'd, the navigation matcher never matched, and
+ * the offline fallbacks resolved to nothing — the service worker registered
+ * (when it could be found at all) and then did nothing whatsoever. Deriving
+ * the prefix from the scope makes one worker correct in both layouts.
+ *
+ * BASE is '' at the root and '/driver' under the web app — i.e. always safe
+ * to concatenate directly onto a leading-slash path.
+ */
+const BASE = new URL(self.registration.scope).pathname.replace(/\/$/, '')
+
 // Pre-cache list. We can't request these on install (they're rendered
 // pages, not static files) — instead, we warm them up here so they end
-// up in the cache the moment the user first lands on /driver.
+// up in the cache the moment the user first lands on the app.
 const PRECACHE_ROUTES = [
-  '/driver',
-  '/driver/dashboard',
-  '/driver/map',
-  '/driver/messages',
-  '/driver/performance',
-  '/driver/completed-orders',
+  `${BASE}/`,
+  `${BASE}/dashboard`,
+  `${BASE}/map`,
+  `${BASE}/messages`,
+  `${BASE}/performance`,
+  `${BASE}/completed-orders`,
 ]
 
 self.addEventListener('install', (event) => {
@@ -108,8 +128,11 @@ self.addEventListener('fetch', (event) => {
   // Online: get the latest HTML, also stash it for next offline launch.
   // Offline: serve last cached version of this page (or /driver as a
   // last-resort fallback so the driver at least sees the login screen).
+  // BASE is '' in the static-export APK, where every page sits at the root,
+  // so this reduces to "any navigation on this origin" there — which is
+  // correct, since the origin serves nothing but the driver app.
   const isDriverNav =
-    (url.pathname === '/driver' || url.pathname.startsWith('/driver/')) &&
+    (url.pathname === (BASE || '/') || url.pathname.startsWith(`${BASE}/`)) &&
     (request.mode === 'navigate' || request.destination === 'document')
 
   if (isDriverNav) {
@@ -122,10 +145,11 @@ self.addEventListener('fetch', (event) => {
           }
           return response
         })
-        .catch(() =>
-          caches.match(request).then(
-            (cached) => cached || caches.match('/driver/dashboard') || caches.match('/driver')
-          )
+        .catch(async () =>
+          (await caches.match(request)) ||
+          (await caches.match(`${BASE}/dashboard`)) ||
+          (await caches.match(`${BASE}/`)) ||
+          Response.error()
         )
     )
     return
