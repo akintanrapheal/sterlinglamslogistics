@@ -2,7 +2,8 @@
 
 import { useEffect, useState, useRef, useMemo } from "react"
 import { useRouter } from "next/navigation"
-import { Menu, List, MapPin, MapPinOff, Navigation, Phone } from "lucide-react"
+import { Menu, List, Layers, MapPin, MapPinOff, Navigation, Phone, X } from "lucide-react"
+import { hapticTap } from "@/lib/native-bridge"
 import { Badge } from "@/components/ui/badge"
 import { useDriver } from "@/components/driver-context"
 import type { Order } from "@/lib/data"
@@ -10,6 +11,51 @@ import { cn } from "@/lib/utils"
 import { loadGoogleMaps, geocodeAddress } from "@/lib/google-maps"
 import { parseFirestoreDate } from "@/lib/order-utils"
 import { getHubCoordinates } from "@/lib/geocode"
+
+/** Base map styles offered in the layers sheet. */
+type MapTypeId = "roadmap" | "satellite" | "terrain"
+
+const MAP_LAYERS_KEY = "driverMapLayers"
+
+/** Row in the layers sheet. Whole row is the target — it's pressed one-handed
+ *  at the wheel, so a small switch on the right would be a poor tap target. */
+function LayerToggle({
+  label,
+  description,
+  checked,
+  onChange,
+}: {
+  label: string
+  description: string
+  checked: boolean
+  onChange: () => void
+}) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={checked}
+      onClick={onChange}
+      className="flex w-full items-center justify-between gap-3 rounded-xl border border-border px-4 py-3 text-left hover:bg-muted"
+    >
+      <span>
+        <span className="block text-sm font-medium">{label}</span>
+        <span className="block text-xs text-muted-foreground">{description}</span>
+      </span>
+      <span
+        className={`relative h-6 w-11 shrink-0 rounded-full transition-colors ${
+          checked ? "bg-green-600 dark:bg-green-500" : "bg-muted-foreground/30"
+        }`}
+      >
+        <span
+          className={`absolute top-0.5 h-5 w-5 rounded-full bg-white shadow transition-all ${
+            checked ? "left-[22px]" : "left-0.5"
+          }`}
+        />
+      </span>
+    </button>
+  )
+}
 import { buildNavUrl, getNavApp } from "@/lib/nav"
 
 export default function DriverMapPage() {
@@ -23,6 +69,15 @@ export default function DriverMapPage() {
   const [selectedOrder, setSelectedOrder] = useState<Order | null>(null)
   const [mapReady, setMapReady] = useState(false)
   const [mapError, setMapError] = useState<string | null>(null)
+
+  // Map layers. Persisted so a driver who prefers satellite or leaves traffic
+  // on doesn't have to reset it every time they open the tab.
+  const [layersOpen, setLayersOpen] = useState(false)
+  const [mapType, setMapType] = useState<MapTypeId>("roadmap")
+  const [trafficOn, setTrafficOn] = useState(false)
+  const [transitOn, setTransitOn] = useState(false)
+  const trafficLayerRef = useRef<google.maps.TrafficLayer | null>(null)
+  const transitLayerRef = useRef<google.maps.TransitLayer | null>(null)
 
   // Redirect if no session
   useEffect(() => {
@@ -49,6 +104,54 @@ export default function DriverMapPage() {
     () => activeOrders.map((o) => `${o.id}:${o.status}`).join(","),
     [activeOrders]
   )
+
+  // Restore the driver's saved layer choices once, before the map exists —
+  // the effects below apply them as soon as it does.
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(MAP_LAYERS_KEY)
+      if (!raw) return
+      const saved = JSON.parse(raw) as { mapType?: MapTypeId; traffic?: boolean; transit?: boolean }
+      if (saved.mapType === "roadmap" || saved.mapType === "satellite" || saved.mapType === "terrain") {
+        setMapType(saved.mapType)
+      }
+      setTrafficOn(Boolean(saved.traffic))
+      setTransitOn(Boolean(saved.transit))
+    } catch { /* corrupt or unavailable storage — keep defaults */ }
+  }, [])
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(
+        MAP_LAYERS_KEY,
+        JSON.stringify({ mapType, traffic: trafficOn, transit: transitOn }),
+      )
+    } catch { /* non-fatal */ }
+  }, [mapType, trafficOn, transitOn])
+
+  // Base map style. Guarded on mapReady because setMapTypeId needs the map.
+  useEffect(() => {
+    if (!mapReady || !mapRef.current) return
+    mapRef.current.setMapTypeId(mapType)
+  }, [mapType, mapReady])
+
+  // Traffic and transit overlays. Constructed lazily and then attached or
+  // detached — recreating them on every toggle would re-request tiles.
+  useEffect(() => {
+    if (!mapReady || !mapRef.current) return
+    if (trafficOn && !trafficLayerRef.current) {
+      trafficLayerRef.current = new google.maps.TrafficLayer()
+    }
+    trafficLayerRef.current?.setMap(trafficOn ? mapRef.current : null)
+  }, [trafficOn, mapReady])
+
+  useEffect(() => {
+    if (!mapReady || !mapRef.current) return
+    if (transitOn && !transitLayerRef.current) {
+      transitLayerRef.current = new google.maps.TransitLayer()
+    }
+    transitLayerRef.current?.setMap(transitOn ? mapRef.current : null)
+  }, [transitOn, mapReady])
 
   // Poll for new orders every 15 seconds
   useEffect(() => {
@@ -280,13 +383,27 @@ export default function DriverMapPage() {
           </button>
           <h1 className="text-lg font-bold">Map</h1>
         </div>
-        <button
-          type="button"
-          onClick={() => router.push("/driver/dashboard")}
-          className="rounded-lg p-1.5 hover:bg-muted"
-        >
-          <List className="h-5 w-5" />
-        </button>
+        <div className="flex items-center gap-1">
+          {/* Map layers. This slot used to be a second route back to the
+              Orders tab, which the bottom nav already provides — so the only
+              button on the map screen did nothing map-related. */}
+          <button
+            type="button"
+            onClick={() => { void hapticTap(); setLayersOpen(true) }}
+            className="rounded-lg p-2 hover:bg-muted"
+            aria-label="Map layers"
+          >
+            <Layers className="h-5 w-5" />
+          </button>
+          <button
+            type="button"
+            onClick={() => router.push("/driver/dashboard")}
+            className="rounded-lg p-2 hover:bg-muted"
+            aria-label="Order list"
+          >
+            <List className="h-5 w-5" />
+          </button>
+        </div>
       </div>
 
       {/* Map */}
@@ -313,10 +430,79 @@ export default function DriverMapPage() {
               mapRef.current.setZoom(15)
             }
           }}
-          className="absolute bottom-24 right-4 z-[20] flex h-10 w-10 items-center justify-center rounded-full bg-background shadow-lg border"
+          // Sits above Google's zoom control rather than on top of it. The
+          // zoom buttons are anchored bottom-right by the Maps API and occupy
+          // roughly the first 110px, which bottom-24 (96px) overlapped.
+          className="absolute bottom-40 right-4 z-[20] flex h-11 w-11 items-center justify-center rounded-full border bg-background shadow-lg"
+          aria-label="Centre on my location"
         >
-          <Navigation className="h-5 w-5 text-blue-600" />
+          <Navigation className="h-5 w-5 text-blue-600 dark:text-blue-400" />
         </button>
+      )}
+
+      {/* Map layers sheet */}
+      {layersOpen && (
+        <>
+          <div
+            className="absolute inset-0 z-[30] bg-black/40"
+            onClick={() => setLayersOpen(false)}
+          />
+          <div className="absolute inset-x-0 bottom-0 z-[31] rounded-t-2xl border-t bg-background p-4 pb-6 shadow-2xl">
+            <div className="mb-4 flex items-center justify-between">
+              <h2 className="font-semibold">Map layers</h2>
+              <button
+                type="button"
+                onClick={() => setLayersOpen(false)}
+                className="rounded-lg p-1.5 hover:bg-muted"
+                aria-label="Close"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            <p className="mb-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">
+              Map type
+            </p>
+            <div className="mb-5 grid grid-cols-3 gap-2">
+              {([
+                { id: "roadmap", label: "Default" },
+                { id: "satellite", label: "Satellite" },
+                { id: "terrain", label: "Terrain" },
+              ] as const).map((opt) => (
+                <button
+                  key={opt.id}
+                  type="button"
+                  onClick={() => { void hapticTap(); setMapType(opt.id) }}
+                  className={`rounded-xl border-2 py-3 text-sm font-medium ${
+                    mapType === opt.id
+                      ? "border-green-600 bg-green-50 text-green-700 dark:border-green-400 dark:bg-green-950/40 dark:text-green-300"
+                      : "border-border text-foreground hover:bg-muted"
+                  }`}
+                >
+                  {opt.label}
+                </button>
+              ))}
+            </div>
+
+            <p className="mb-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">
+              Details
+            </p>
+            <div className="space-y-2">
+              <LayerToggle
+                label="Traffic"
+                description="Live congestion on your route"
+                checked={trafficOn}
+                onChange={() => { void hapticTap(); setTrafficOn((v) => !v) }}
+              />
+              <LayerToggle
+                label="Public transport"
+                description="Bus and rail lines"
+                checked={transitOn}
+                onChange={() => { void hapticTap(); setTransitOn((v) => !v) }}
+              />
+            </div>
+          </div>
+        </>
       )}
 
       {/* Order detail bottom sheet */}
