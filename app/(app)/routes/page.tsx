@@ -905,7 +905,18 @@ export default function RoutesPage() {
           {onlineDrivers.length > 0 && (
             <div>
               <div className="mb-2 flex items-center justify-between">
-                <p className="text-sm font-semibold text-foreground">Online drivers ({onlineDrivers.length})</p>
+                <p className="text-sm font-semibold text-foreground">
+                  Online drivers ({onlineDrivers.length})
+                  {/* A driver listed here but absent from the map is a real
+                      condition dispatch needs to see — no GPS fix yet, or a
+                      ping so old it has aged off — not something to work out
+                      by hunting for a missing dot among the order markers. */}
+                  {activeDrivers.length !== onlineDrivers.length && (
+                    <span className="ml-1 font-normal text-muted-foreground">
+                      · {activeDrivers.length} on map
+                    </span>
+                  )}
+                </p>
                 {focusedDriverId && (
                   <button type="button" onClick={() => setFocusedDriverId(null)} className="text-[11px] text-primary hover:underline">Show all</button>
                 )}
@@ -915,7 +926,12 @@ export default function RoutesPage() {
                   const hasGps = Boolean(driver.lastLocation)
                   const pingMs = driver.lastPingAt ? (typeof driver.lastPingAt === "object" && "seconds" in (driver.lastPingAt as object) ? (driver.lastPingAt as { seconds: number }).seconds * 1000 : Number(driver.lastPingAt)) : null
                   const pingAgo = pingMs ? Math.round((Date.now() - pingMs) / 1000) : null
-                  const pingText = pingAgo === null ? "No ping yet" : pingAgo < 60 ? `${pingAgo}s ago` : `${Math.floor(pingAgo / 60)}m ago`
+                  // Same parser the map filter uses. These were computed
+                  // separately, so the sidebar could report a healthy ping
+                  // while the map disagreed and dropped the driver.
+                  const pingAgeMs = driverPingAgeMs(driver)
+                  const pingText = pingAgo === null ? "No ping yet" : pingAgo < 60 ? `${pingAgo}s ago` : formatPingAge(pingAgeMs)
+                  const onMap = Boolean(driver.lastLocation) && pingAgeMs < STALE_DROP_MS
                   const driverOrderCount = visibleOrders.filter((o) => o.assignedDriver === driver.id).length
                   const isFocused = focusedDriverId === driver.id
                   return (
@@ -934,7 +950,10 @@ export default function RoutesPage() {
                         </div>
                         <div className="flex min-w-0 flex-1 flex-col">
                           <span className="truncate text-sm font-medium text-foreground">{driver.name.split(" ")[0]}</span>
-                          <span className="text-[10px] text-muted-foreground">{pingText}</span>
+                          <span className="text-[10px] text-muted-foreground">
+                            {pingText}
+                            {!onMap && <span className="ml-1 text-amber-600">· not on map</span>}
+                          </span>
                           {!hasGps && driver.lastPingError && (
                             <span className="text-[10px] text-amber-600 break-all leading-snug">{driver.lastPingError}</span>
                           )}
