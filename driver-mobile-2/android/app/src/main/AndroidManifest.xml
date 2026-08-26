@@ -43,6 +43,31 @@
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
 
+    <!--
+      Background location tracking.
+
+      The WebView's geolocation stops the moment Android backgrounds the app,
+      so a driver who switched apps vanished from dispatch's map while still
+      on the road. Continuing to track requires a foreground service, which
+      Android has mandated a permanent notification for since Oreo.
+
+      ACCESS_BACKGROUND_LOCATION cannot be granted from the normal permission
+      dialog on Android 11+; the user must choose "Allow all the time" in app
+      settings. POST_NOTIFICATIONS is required on 13+ or the service's
+      notification — and therefore the service — is silently suppressed.
+
+      Note there is deliberately no <service> element here. The last attempt
+      at this hand-declared com.marianhello.bgloc, a Cordova plugin's class,
+      which crashed the APK on startup (see 1e3928c/ead7f66). The Capacitor
+      plugin registers its own service via manifest merge during cap sync;
+      declaring one by hand is what to avoid.
+    -->
+    <uses-permission android:name="android.permission.ACCESS_BACKGROUND_LOCATION" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+
     <!-- Camera — proof-of-delivery photos -->
     <uses-permission android:name="android.permission.CAMERA" />
     <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
