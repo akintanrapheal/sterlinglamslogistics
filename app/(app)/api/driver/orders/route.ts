@@ -40,7 +40,13 @@ export async function GET(req: Request) {
   // "active" is what the polling path actually needs: the current workload,
   // typically a handful of documents. "all" is for screens that genuinely
   // need history, and is bounded rather than open-ended.
-  const scope = searchParams.get("scope") === "all" ? "all" : "active"
+  // Defaults to "all" so a client that doesn't know about this parameter keeps
+  // the behaviour it was built against. Defaulting to "active" silently broke
+  // already-installed APKs: they ask without a scope, so Completed Orders and
+  // Performance suddenly saw no delivered orders at all. "all" is bounded, so
+  // an older client is merely less efficient rather than wrong — the polling
+  // path asks for "active" explicitly.
+  const scope = searchParams.get("scope") === "active" ? "active" : "all"
 
   try {
     const base = adminDb.collection("orders").where("assignedDriver", "==", driverId)
