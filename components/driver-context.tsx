@@ -9,7 +9,7 @@ import { driverFetch, clearDriverToken } from "@/lib/driver-client"
 import { getPendingDeliveries, removePendingDelivery, pendingDeliveryCount as getPendingCount } from "@/lib/delivery-queue"
 import { getPendingStatusUpdates, removeStatusUpdate, pendingStatusCount } from "@/lib/status-queue"
 import { loadCachedOrders, saveCachedOrders, clearCachedOrders } from "@/lib/order-cache"
-import { onAppResume } from "@/lib/native-bridge"
+import { onAppResume, startBackgroundLocation } from "@/lib/native-bridge"
 
 interface DriverSession {
   id: string
@@ -148,6 +148,9 @@ export function DriverProvider({ children }: { children: ReactNode }) {
   // True while refreshes are failing, so the toast fires once per outage
   // rather than once per polled attempt.
   const refreshFailedRef = useRef(false)
+  // True once the native foreground service is reporting, so the WebView
+  // watcher stands down instead of duplicating every write.
+  const backgroundTrackingRef = useRef(false)
 
   // Load session from localStorage
   useEffect(() => {
@@ -214,9 +217,70 @@ export function DriverProvider({ children }: { children: ReactNode }) {
     return () => { cancelled = true; window.clearInterval(id) }
   }, [session])
 
+  /**
+   * Background location, when the APK provides it.
+   *
+   * Runs a foreground service that keeps reporting after Android backgrounds
+   * the app — the case the WebView's watchPosition cannot cover, and the
+   * reason drivers disappeared from dispatch's map whenever they switched
+   * apps or their screen locked.
+   *
+   * Started before the foreground watcher below and, when it succeeds, used
+   * instead of it: running both would double the write rate for the same
+   * positions. If the plugin is absent (browser, or an APK built without it)
+   * this is a no-op and the foreground watcher takes over unchanged.
+   */
+  useEffect(() => {
+    if (!session || !isOnline) return
+    const sessionId = session.id
+    let stop: null | (() => void) = null
+    let cancelled = false
+
+    void startBackgroundLocation(
+      (fix) => {
+        const coords = { lat: fix.latitude, lng: fix.longitude }
+        setLiveGps(coords)
+        setGpsError(false)
+        // The plugin already filters by distance, so no extra throttle here.
+        void driverFetch("/api/driver/location", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ driverId: sessionId, lat: coords.lat, lng: coords.lng }),
+        }).catch(() => { /* best-effort; the next fix retries */ })
+      },
+      (message, permissionDenied) => {
+        setGpsError(true)
+        if (permissionDenied) {
+          // Android 11+ won't grant this from the in-app prompt — it has to be
+          // chosen in system settings, so say so rather than just failing.
+          toast({
+            title: "Background location is off",
+            description:
+              "Open Settings → Permissions → Location and choose \"Allow all the time\", so dispatch can see you when the app isn't open.",
+            variant: "destructive",
+          })
+        } else {
+          toast({ title: "Location error", description: message, variant: "destructive" })
+        }
+      },
+    ).then((fn) => {
+      if (cancelled) { fn?.(); return }
+      stop = fn
+      backgroundTrackingRef.current = Boolean(fn)
+    })
+
+    return () => {
+      cancelled = true
+      stop?.()
+      backgroundTrackingRef.current = false
+    }
+  }, [session, isOnline])
+
   // GPS tracking when online
   useEffect(() => {
     if (!session || !isOnline) return
+    // Skip when the foreground service is already reporting — see above.
+    if (backgroundTrackingRef.current) return
     if (!navigator.geolocation) {
       toast({ title: "Location unavailable", description: "Your device does not support GPS.", variant: "destructive" })
       return

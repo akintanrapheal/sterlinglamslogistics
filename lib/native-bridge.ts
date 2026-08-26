@@ -30,6 +30,23 @@ interface CapacitorGlobal {
       setStyle: (opts: { style: string }) => Promise<void>
       setOverlaysWebView: (opts: { overlay: boolean }) => Promise<void>
     }
+    BackgroundGeolocation?: {
+      addWatcher: (
+        opts: {
+          backgroundMessage?: string
+          backgroundTitle?: string
+          requestPermissions?: boolean
+          stale?: boolean
+          distanceFilter?: number
+        },
+        cb: (
+          position?: { latitude: number; longitude: number; accuracy?: number },
+          error?: { code?: string; message?: string },
+        ) => void,
+      ) => Promise<string>
+      removeWatcher: (opts: { id: string }) => Promise<void>
+      openSettings: () => Promise<void>
+    }
     App?: {
       addListener: (
         event: string,
@@ -133,6 +150,71 @@ export async function onAppResume(handler: () => void): Promise<() => void> {
   } catch {
     return () => {}
   }
+}
+
+export interface BackgroundLocationFix {
+  latitude: number
+  longitude: number
+  accuracy?: number
+}
+
+/**
+ * Track location while the app is backgrounded.
+ *
+ * The WebView's navigator.geolocation is suspended as soon as Android
+ * backgrounds the app, so a driver who switched apps or locked their phone
+ * disappeared from dispatch's map while still driving. This runs in a
+ * foreground service instead, which keeps reporting until it is stopped.
+ *
+ * Android requires a permanent notification for that service; backgroundTitle
+ * and backgroundMessage are what the driver sees in their shade, so they say
+ * plainly why it is running.
+ *
+ * Returns a stop function, or null when there is no plugin — in a browser, or
+ * if the APK was built without it. Callers must keep their existing
+ * foreground watchPosition for that case rather than relying on this.
+ */
+export async function startBackgroundLocation(
+  onFix: (fix: BackgroundLocationFix) => void,
+  onError?: (message: string, permissionDenied: boolean) => void,
+): Promise<null | (() => void)> {
+  const plugin = getCapacitor()?.Plugins?.BackgroundGeolocation
+  if (!plugin) return null
+
+  try {
+    const id = await plugin.addWatcher(
+      {
+        backgroundTitle: "Sharing your location",
+        backgroundMessage: "Dispatch can see your position while you are online.",
+        requestPermissions: true,
+        // Deliver the last known fix immediately rather than waiting for the
+        // first new one, so the map isn't blank right after going online.
+        stale: false,
+        // Metres of movement before a new fix is reported. Sitting in traffic
+        // shouldn't drain the battery or spend Firestore writes.
+        distanceFilter: 25,
+      },
+      (position, error) => {
+        if (error) {
+          // NOT_AUTHORIZED means the driver declined, or granted only
+          // "while using the app" — which Android treats as no background
+          // permission at all.
+          onError?.(error.message ?? "Location error", error.code === "NOT_AUTHORIZED")
+          return
+        }
+        if (position) onFix(position)
+      },
+    )
+    return () => { void plugin.removeWatcher({ id }).catch(() => { /* already gone */ }) }
+  } catch (err) {
+    onError?.(err instanceof Error ? err.message : "Could not start background location", false)
+    return null
+  }
+}
+
+/** Open the app's system settings, where "Allow all the time" is granted. */
+export async function openLocationSettings(): Promise<void> {
+  try { await getCapacitor()?.Plugins?.BackgroundGeolocation?.openSettings() } catch { /* ignore */ }
 }
 
 /** True when running inside a Capacitor WebView (driver-mobile APK). */
