@@ -20,6 +20,7 @@ import { subscribeDriversRealtime, subscribeOrdersRealtime } from "@/lib/firesto
 import { loadGoogleMaps, onGoogleMapsAuthFailure } from "@/lib/google-maps"
 import { useAuth } from "@/components/auth-provider"
 import type { Driver, Order } from "@/lib/data"
+import { parseFirestoreDate } from "@/lib/order-utils"
 
 type LatLng = { lat: number; lng: number }
 
@@ -28,6 +29,35 @@ const LAGOS_CENTER: LatLng = { lat: 6.5244, lng: 3.3792 }
 const HUB: LatLng = {
   lat: Number(process.env.NEXT_PUBLIC_HUB_LAT) || 6.4642667,
   lng: Number(process.env.NEXT_PUBLIC_HUB_LNG) || 3.5554814,
+}
+
+/** A ping older than this is shown greyed rather than live. */
+const STALE_AFTER_MS = 2 * 60_000
+
+/**
+ * A ping older than this drops off the map entirely.
+ *
+ * Long enough to cover a driver with the app backgrounded for a while;
+ * short enough that a phone switched off overnight isn't still shown at
+ * yesterday's last known position.
+ */
+const STALE_DROP_MS = 60 * 60_000
+
+/** Milliseconds since a driver's last GPS ping, or Infinity if never. */
+function driverPingAgeMs(driver: Driver): number {
+  const ts = parseFirestoreDate(driver.lastPingAt)
+  if (!ts) return Number.POSITIVE_INFINITY
+  return Date.now() - ts.getTime()
+}
+
+/** "just now" / "4 min ago" / "2 hr ago" for a ping age. */
+function formatPingAge(ms: number): string {
+  if (!Number.isFinite(ms)) return "no GPS yet"
+  const mins = Math.floor(ms / 60_000)
+  if (mins < 1) return "just now"
+  if (mins < 60) return `${mins} min ago`
+  const hrs = Math.floor(mins / 60)
+  return `${hrs} hr ago`
 }
 
 export default function RoutesPage() {
@@ -83,8 +113,21 @@ export default function RoutesPage() {
     [orders]
   )
 
+  /**
+   * Drivers plotted on the map.
+   *
+   * Deliberately includes drivers whose GPS has gone quiet. The driver app
+   * tracks location from the WebView, which Android suspends as soon as the
+   * app leaves the foreground — so a driver who switches apps, or whose phone
+   * locks, stops pinging while still very much on the road. Filtering on a
+   * live ping made them vanish from dispatch's map entirely, which is worse
+   * than showing where they were a few minutes ago.
+   *
+   * They stay plotted, visibly stale, until their last ping ages out or they
+   * actually go offline.
+   */
   const activeDrivers = useMemo(
-    () => drivers.filter((d) => d.status !== "offline" && d.lastLocation),
+    () => drivers.filter((d) => d.lastLocation && driverPingAgeMs(d) < STALE_DROP_MS),
     [drivers]
   )
 
@@ -242,7 +285,12 @@ export default function RoutesPage() {
    * (SMIL) when the data URL is fully percent-encoded. Escape only '#' manually,
    * exactly as the tracking page does.
    */
-  function makeDriverMarkerIcon(name: string, size: number, selected: boolean): google.maps.Icon {
+  function makeDriverMarkerIcon(
+    name: string,
+    size: number,
+    selected: boolean,
+    stale = false,
+  ): google.maps.Icon {
     // Canvas is 2× the marker size so the radar pulse can extend well past
     // the marker edge without being clipped. The dark marker stays at its
     // original size, centered inside the larger canvas.
@@ -259,8 +307,15 @@ export default function RoutesPage() {
     // is fully percent-encoded, so only the '#' is escaped manually.
     const pulseDur = selected ? "1s" : "2s"
     const pulseMax = center - 4
-    const pulse = `<circle cx="${center}" cy="${center}" r="${r}" fill="%2316a34a" fill-opacity="0.18"><animate attributeName="r" values="${r - 2};${pulseMax};${r - 2}" dur="${pulseDur}" repeatCount="indefinite"/><animate attributeName="fill-opacity" values="0.5;0;0.5" dur="${pulseDur}" repeatCount="indefinite"/></circle>`
-    const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${canvas}" height="${canvas}" viewBox="0 0 ${canvas} ${canvas}">${pulse}<circle cx="${center}" cy="${center}" r="${r}" fill="%231a1a2e" stroke="white" stroke-width="3"/><text x="${center}" y="${center + 1}" text-anchor="middle" dominant-baseline="central" font-family="system-ui,sans-serif" font-weight="700" font-size="${fontSize}" fill="white">${label}</text></svg>`
+    // The pulse means "this position is live". A driver whose app is
+    // backgrounded is still shown, but must not look like a moving dot — so
+    // stale markers lose the pulse and go grey, and dispatch can tell at a
+    // glance which positions to trust.
+    const pulse = stale
+      ? ""
+      : `<circle cx="${center}" cy="${center}" r="${r}" fill="%2316a34a" fill-opacity="0.18"><animate attributeName="r" values="${r - 2};${pulseMax};${r - 2}" dur="${pulseDur}" repeatCount="indefinite"/><animate attributeName="fill-opacity" values="0.5;0;0.5" dur="${pulseDur}" repeatCount="indefinite"/></circle>`
+    const body = stale ? "%239ca3af" : "%231a1a2e"
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${canvas}" height="${canvas}" viewBox="0 0 ${canvas} ${canvas}">${pulse}<circle cx="${center}" cy="${center}" r="${r}" fill="${body}" stroke="white" stroke-width="3"/><text x="${center}" y="${center + 1}" text-anchor="middle" dominant-baseline="central" font-family="system-ui,sans-serif" font-weight="700" font-size="${fontSize}" fill="white">${label}</text></svg>`
     return {
       url: `data:image/svg+xml;charset=UTF-8,${svg}`,
       scaledSize: new google.maps.Size(canvas, canvas),
@@ -622,8 +677,10 @@ export default function RoutesPage() {
       if (!driver.lastLocation) return
       const newPos = { lat: driver.lastLocation.lat, lng: driver.lastLocation.lng }
       const isSelectedDrv = Boolean(selectedDriver && selectedDriver.id === driver.id)
+      const pingAge = driverPingAgeMs(driver)
+      const isStale = pingAge >= STALE_AFTER_MS
       // Drivers always overlay order markers (hub=1000, selected order=999)
-      const icon = makeDriverMarkerIcon(driver.name, isSelectedDrv ? 48 : 36, isSelectedDrv)
+      const icon = makeDriverMarkerIcon(driver.name, isSelectedDrv ? 48 : 36, isSelectedDrv, isStale)
       const zIdx = isSelectedDrv ? 2000 : 1500
 
       const existing = driverMarkersMapRef.current.get(driver.id)
@@ -631,6 +688,7 @@ export default function RoutesPage() {
       if (existing) {
         existing.setIcon(icon)
         existing.setZIndex(zIdx)
+        existing.setTitle(`${driver.name} — ${formatPingAge(pingAge)}`)
 
         // Cancel any in-progress animation for this driver
         const prevFrame = driverAnimFramesRef.current.get(driver.id)
