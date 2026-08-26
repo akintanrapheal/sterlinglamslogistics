@@ -499,8 +499,25 @@ export async function fetchOrdersPaginated(
   }
 }
 
+/**
+ * Upper bound on the realtime order feed.
+ *
+ * Firestore bills a listener's initial attach as a read of every document it
+ * matches. This query was unbounded, and it is attached by six admin screens
+ * plus the global order-alert provider — so each navigation re-read the
+ * entire orders collection, several times over. On a few thousand orders that
+ * exhausts a day's read quota in a handful of page loads, which is how every
+ * server read started failing with RESOURCE_EXHAUSTED.
+ *
+ * 500 most-recent orders covers every operational screen (dispatch, routes,
+ * the order list, alerts). Reporting that needs to reach further back should
+ * use fetchOrdersPaginated, which is explicitly paged, rather than widening
+ * this and putting the whole collection back on every page load.
+ */
+const REALTIME_ORDER_LIMIT = 500
+
 export function subscribeOrdersRealtime(onData: (orders: Order[]) => void) {
-  const q = query(ordersCollection, orderBy("createdAt", "desc"))
+  const q = query(ordersCollection, orderBy("createdAt", "desc"), firestoreLimit(REALTIME_ORDER_LIMIT))
   return onSnapshot(
     q,
     (snapshot) => {

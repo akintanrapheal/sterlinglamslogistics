@@ -83,6 +83,36 @@ const ORDER_POLL_MS = 45_000
  */
 const PROFILE_POLL_MS = 30_000
 
+/**
+ * Last known online state, persisted per driver.
+ *
+ * isOnline is authoritative on the server, but it was only ever learned from
+ * the profile poll — so every cold start rendered the "Go Online" screen
+ * until the network answered, and stayed there indefinitely if it didn't. A
+ * driver who was mid-shift when Android killed the app came back to a prompt
+ * telling them to start a shift they had never ended.
+ *
+ * Seeding from the last known value makes the restart continuous; the poll
+ * still corrects it within seconds if the server disagrees.
+ */
+const ONLINE_KEY = "driverOnlineState"
+
+function readPersistedOnline(driverId: string): boolean {
+  try {
+    return localStorage.getItem(`${ONLINE_KEY}:${driverId}`) === "1"
+  } catch {
+    return false
+  }
+}
+
+function persistOnline(driverId: string, online: boolean): void {
+  try {
+    localStorage.setItem(`${ONLINE_KEY}:${driverId}`, online ? "1" : "0")
+  } catch {
+    /* storage disabled — in-memory state still works for this session */
+  }
+}
+
 const DriverContext = createContext<DriverContextValue | null>(null)
 
 export function useDriver() {
@@ -130,6 +160,8 @@ export function DriverProvider({ children }: { children: ReactNode }) {
       const parsed = JSON.parse(raw) as DriverSession
       if (parsed?.id) {
         setSession(parsed)
+        // Restore the shift state before any network call resolves.
+        setIsOnline(readPersistedOnline(parsed.id))
       }
     } catch {
       localStorage.removeItem("driverSession")
@@ -170,7 +202,9 @@ export function DriverProvider({ children }: { children: ReactNode }) {
         const data = (await res.json()) as { ok: boolean; driver?: Driver }
         if (data.driver && !cancelled) {
           setDriver(data.driver)
-          setIsOnline(data.driver.status === "available" || data.driver.status === "on-delivery")
+          const online = data.driver.status === "available" || data.driver.status === "on-delivery"
+          setIsOnline(online)
+          persistOnline(data.driver.id, online)
         }
       } catch { /* ignore transient errors — next poll will retry */ }
     }
@@ -585,6 +619,7 @@ export function DriverProvider({ children }: { children: ReactNode }) {
       })
       if (!res.ok) throw new Error("Failed to go online")
       setIsOnline(true)
+      persistOnline(session.id, true)
       setJustWentOnline(true)
       setGpsError(false)
       lastGpsWriteRef.current = 0
@@ -613,6 +648,7 @@ export function DriverProvider({ children }: { children: ReactNode }) {
       })
       if (!res.ok) throw new Error("Failed to go offline")
       setIsOnline(false)
+      persistOnline(session.id, false)
       setJustWentOnline(false)
       const profileRes = await driverFetch("/api/driver/profile", {})
       if (profileRes.ok) {
@@ -646,7 +682,10 @@ export function DriverProvider({ children }: { children: ReactNode }) {
     // Drop the cached round as well — handsets get shared between drivers,
     // and customer names, addresses and phone numbers must not outlive the
     // session that fetched them.
-    if (session) clearCachedOrders(session.id)
+    if (session) {
+      clearCachedOrders(session.id)
+      persistOnline(session.id, false)
+    }
     clearDriverToken()
     setSession(null)
     setDriver(null)
