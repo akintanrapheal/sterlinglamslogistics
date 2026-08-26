@@ -51,28 +51,51 @@ export async function GET(req: Request) {
   try {
     const base = adminDb.collection("orders").where("assignedDriver", "==", driverId)
 
-    // No orderBy on the history query. Combining an equality filter with
-    // orderBy on a different field needs a composite index, and without one
-    // Firestore rejects the query outright — which is exactly what happened:
-    // scope=all returned a 500 while scope=active worked, so Completed Orders
-    // and Performance came up empty. Sorting a driver's own orders in memory
-    // avoids the index entirely and costs nothing at this size.
-    const snap = await (scope === "active"
-      ? base.where("status", "in", ACTIVE_STATUSES).get()
-      : base.limit(MAX_HISTORY_ORDERS).get())
+    // Active orders are always fetched on their own, never as a slice of
+    // history. They are the driver's actual work, and a bounded history query
+    // can silently exclude them: ordering by document id rather than date
+    // returned an arbitrary 200 delivered orders and dropped the one job the
+    // driver still had to do.
+    const activeSnap = await base.where("status", "in", ACTIVE_STATUSES).get()
+    const activeOrders = activeSnap.docs.map((doc) => ({ id: doc.id, ...doc.data() }))
 
-    const orders = snap.docs.map((doc) => ({ id: doc.id, ...doc.data() }))
-
-    if (scope === "all") {
-      // Newest first. Admin SDK timestamps serialise as _seconds, and orders
-      // predating a field are sorted last rather than dropped.
-      const ms = (v: unknown): number => {
-        if (!v || typeof v !== "object") return 0
-        const t = v as { _seconds?: number; seconds?: number }
-        return (t._seconds ?? t.seconds ?? 0) * 1000
-      }
-      orders.sort((a, b) => ms((b as { createdAt?: unknown }).createdAt) - ms((a as { createdAt?: unknown }).createdAt))
+    if (scope === "active") {
+      return NextResponse.json({ ok: true, orders: activeOrders })
     }
+
+    // History, newest first. This pairs an equality filter with an orderBy on
+    // another field, which Firestore only serves with a composite index (see
+    // firestore.indexes.json). If that index hasn't been deployed the query is
+    // rejected outright, so fall back to an unordered page rather than failing
+    // the whole request — history is then approximate instead of absent, and
+    // the active orders above are unaffected either way.
+    let historyDocs: FirebaseFirestore.QueryDocumentSnapshot[] = []
+    try {
+      const snap = await base.orderBy("createdAt", "desc").limit(MAX_HISTORY_ORDERS).get()
+      historyDocs = snap.docs
+    } catch (err) {
+      log.warn(
+        { err, driverId },
+        "Ordered history query failed — falling back to unordered page. Deploy the assignedDriver+createdAt index.",
+      )
+      const snap = await base.limit(MAX_HISTORY_ORDERS).get()
+      historyDocs = snap.docs
+    }
+
+    // Merge, letting active orders win so they can't be crowded out.
+    const byId = new Map<string, Record<string, unknown>>()
+    for (const doc of historyDocs) byId.set(doc.id, { id: doc.id, ...doc.data() })
+    for (const o of activeOrders) byId.set(o.id, o)
+
+    const ms = (v: unknown): number => {
+      if (!v || typeof v !== "object") return 0
+      const t = v as { _seconds?: number; seconds?: number }
+      return (t._seconds ?? t.seconds ?? 0) * 1000
+    }
+    const orders = [...byId.values()].sort(
+      (a, b) => ms((b as { createdAt?: unknown }).createdAt) - ms((a as { createdAt?: unknown }).createdAt),
+    )
+
     return NextResponse.json({ ok: true, orders })
   } catch (error) {
     // This was previously swallowed — `error` was bound and never used — so a
