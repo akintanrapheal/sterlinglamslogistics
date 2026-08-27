@@ -74,6 +74,19 @@ export default function RoutesPage() {
   const [mapType, setMapType] = useState<"roadmap" | "satellite">("roadmap")
   const [isFullscreen, setIsFullscreen] = useState(false)
   const [copiedId, setCopiedId] = useState<string | null>(null)
+  /**
+   * Set once the Google map object exists.
+   *
+   * Every effect that draws on the map bails on `if (!map) return`, but the
+   * map is created asynchronously behind `await loadGoogleMaps()`. Whenever
+   * Firestore delivered orders before Maps finished loading, those effects
+   * ran against a null ref, returned silently, and nothing re-triggered them
+   * — so a refresh showed no pins at all, and the next one showed them,
+   * purely on which of the two won the race.
+   *
+   * Depending on this makes the draw re-run the moment the map is ready.
+   */
+  const [mapReady, setMapReady] = useState(false)
 
   const firstOrdersLoadedRef = useRef(false)
   const firstDriversLoadedRef = useRef(false)
@@ -489,6 +502,7 @@ export default function RoutesPage() {
         ],
       })
       mapRef.current = map
+      setMapReady(true)
       orderInfoWindowRef.current = new google.maps.InfoWindow()
     }
 
@@ -506,6 +520,7 @@ export default function RoutesPage() {
       if (hubMarkerRef.current) hubMarkerRef.current.setMap(null)
       if (directionsRendererRef.current) directionsRendererRef.current.setMap(null)
       mapRef.current = null
+      setMapReady(false)
     }
   }, [isLoading])
 
@@ -653,7 +668,7 @@ export default function RoutesPage() {
       }
       hasFitBoundsRef.current = true
     }
-  }, [activeDrivers, orderCoords, selectedDestination, selectedDriver, selectedOrderId, visibleOrders])
+  }, [mapReady, activeDrivers, orderCoords, selectedDestination, selectedDriver, selectedOrderId, visibleOrders])
 
   // ── Live driver markers — smoothly animate position changes ──
   useEffect(() => {
@@ -745,7 +760,7 @@ export default function RoutesPage() {
         driverMarkersMapRef.current.set(driver.id, marker)
       }
     })
-  }, [activeDrivers, selectedDriver])
+  }, [mapReady, activeDrivers, selectedDriver])
 
   const focusOrderOnMap = (order: Order) => {
     setSelectedOrderId(order.id)
@@ -766,7 +781,7 @@ export default function RoutesPage() {
     bounds.extend(HUB)
     if (count > 0) map.fitBounds(bounds, 48)
     else { map.setCenter(LAGOS_CENTER); map.setZoom(11) }
-  }, [visibleOrders, orderCoords, activeDrivers])
+  }, [mapReady, visibleOrders, orderCoords, activeDrivers])
 
   const zoomToDriver = useCallback((driver: Driver) => {
     if (!driver.lastLocation) return
@@ -798,12 +813,12 @@ export default function RoutesPage() {
     }
     window.addEventListener("keydown", handler)
     return () => window.removeEventListener("keydown", handler)
-  }, [filteredOrders, selectedOrderId]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [mapReady, filteredOrders, selectedOrderId]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Toggle map type
   useEffect(() => {
     mapRef.current?.setMapTypeId(mapType)
-  }, [mapType])
+  }, [mapReady, mapType])
 
   if (isLoading) {
     return (

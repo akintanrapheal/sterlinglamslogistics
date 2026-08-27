@@ -1,8 +1,8 @@
 "use client"
 
 import { useDriver } from "@/components/driver-context"
-import { hapticTap } from "@/lib/native-bridge"
-import { CloudOff, Loader2, MapPinOff, RefreshCw, WifiOff } from "lucide-react"
+import { hapticTap, isNativeApp, openLocationSettings } from "@/lib/native-bridge"
+import { CloudOff, Loader2, MapPinOff, RefreshCw, Settings, WifiOff } from "lucide-react"
 
 /**
  * Connection / sync / GPS state, shown on every driver screen.
@@ -16,13 +16,16 @@ import { CloudOff, Loader2, MapPinOff, RefreshCw, WifiOff } from "lucide-react"
  * space on a phone screen unless there is something to say.
  */
 export function DriverStatusBanner() {
-  const { isConnected, syncing, pendingDeliveryCount, gpsError, syncPending, session } = useDriver()
+  const { isConnected, syncing, pendingDeliveryCount, gpsError, syncPending, session, isOnline, backgroundTracking } = useDriver()
 
   // Nothing to report, or nobody logged in to report it to.
   if (!session) return null
   const showOffline = !isConnected
   const showPending = pendingDeliveryCount > 0
-  if (!showOffline && !showPending && !gpsError) return null
+  // Only meaningful inside the APK: on the web there is no foreground service
+  // to be missing, so this would be a permanent false alarm.
+  const showBackgroundOff = isOnline && isNativeApp() && !backgroundTracking
+  if (!showOffline && !showPending && !gpsError && !showBackgroundOff) return null
 
   async function onRetry() {
     void hapticTap()
@@ -69,6 +72,23 @@ export function DriverStatusBanner() {
               Retry now
             </button>
           )}
+        </Banner>
+      )}
+
+      {showBackgroundOff && (
+        <Banner tone="warning" icon={<MapPinOff className="h-4 w-4 shrink-0" />}>
+          <span className="flex-1">
+            Dispatch loses you when the app is closed. Allow location
+            &ldquo;all the time&rdquo;.
+          </span>
+          <button
+            type="button"
+            onClick={() => { void hapticTap(); void openLocationSettings() }}
+            className="flex h-8 shrink-0 items-center gap-1.5 rounded-full bg-black/20 px-3 text-xs font-semibold active:bg-black/30"
+          >
+            <Settings className="h-3.5 w-3.5" />
+            Fix
+          </button>
         </Banner>
       )}
 
