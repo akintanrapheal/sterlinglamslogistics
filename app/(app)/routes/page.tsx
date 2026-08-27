@@ -99,6 +99,11 @@ export default function RoutesPage() {
   const hubMarkerRef = useRef<google.maps.Marker | null>(null)
   const directionsRendererRef = useRef<google.maps.DirectionsRenderer | null>(null)
   const orderInfoWindowRef = useRef<google.maps.InfoWindow | null>(null)
+  // Marker click handlers are attached once, when the marker is created, so
+  // they close over that render's driver object. Reading through a ref keeps
+  // the popup showing the current ping age rather than the age at creation.
+  const driversRef = useRef<Driver[]>([])
+  driversRef.current = drivers
 
   useEffect(() => {
     if (!user) return
@@ -738,23 +743,30 @@ export default function RoutesPage() {
         const marker = new google.maps.Marker({
           map,
           position: newPos,
-          title: driver.name,
+          title: `${driver.name} — ${formatPingAge(pingAge)}`,
           icon,
           zIndex: zIdx,
         })
 
         marker.addListener("click", () => {
           const iw = orderInfoWindowRef.current
-          if (iw) {
-            iw.setContent(`
-              <div style="font-family:system-ui;min-width:140px">
-                <div style="font-weight:700;font-size:13px">${driver.name}</div>
-                <div style="font-size:12px;color:#555">${driver.phone ?? ""}</div>
-                <div style="font-size:11px;color:#3b82f6;font-weight:600;margin-top:4px">${driver.status}</div>
-              </div>
-            `)
-            iw.open(map, marker)
-          }
+          if (!iw) return
+          const current = driversRef.current.find((d) => d.id === driver.id) ?? driver
+          const age = driverPingAgeMs(current)
+          // The whole point of keeping a stale marker on the map is knowing
+          // how old it is, so state it here rather than leaving grey as the
+          // only clue.
+          const ageColor = age >= STALE_AFTER_MS ? "#b45309" : "#16a34a"
+          const ageLabel = age >= STALE_AFTER_MS ? `Last seen ${formatPingAge(age)}` : `Live · ${formatPingAge(age)}`
+          iw.setContent(`
+            <div style="font-family:system-ui;min-width:150px">
+              <div style="font-weight:700;font-size:13px">${current.name}</div>
+              <div style="font-size:12px;color:#555">${current.phone ?? ""}</div>
+              <div style="font-size:11px;color:#3b82f6;font-weight:600;margin-top:4px">${current.status}</div>
+              <div style="font-size:11px;color:${ageColor};font-weight:600;margin-top:2px">${ageLabel}</div>
+            </div>
+          `)
+          iw.open(map, marker)
         })
 
         driverMarkersMapRef.current.set(driver.id, marker)
