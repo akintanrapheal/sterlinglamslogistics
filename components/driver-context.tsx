@@ -59,6 +59,15 @@ interface DriverContextValue {
   syncing: boolean
   /** Force a flush of the offline queues (the banner's "Retry now"). */
   syncPending: () => Promise<void>
+  /**
+   * Whether the native foreground service is reporting location.
+   *
+   * False on the web, and false in the APK when the driver hasn't granted
+   * "Allow all the time" — in which case tracking stops the moment the app is
+   * backgrounded and dispatch loses them, silently. Surfaced so the app can
+   * say so rather than letting it fail invisibly.
+   */
+  backgroundTracking: boolean
 }
 
 // Backoff bounds for flushing the offline write queues.
@@ -151,6 +160,7 @@ export function DriverProvider({ children }: { children: ReactNode }) {
   // True once the native foreground service is reporting, so the WebView
   // watcher stands down instead of duplicating every write.
   const backgroundTrackingRef = useRef(false)
+  const [backgroundTracking, setBackgroundTracking] = useState(false)
 
   // Load session from localStorage
   useEffect(() => {
@@ -251,6 +261,8 @@ export function DriverProvider({ children }: { children: ReactNode }) {
       (message, permissionDenied) => {
         setGpsError(true)
         if (permissionDenied) {
+          backgroundTrackingRef.current = false
+          setBackgroundTracking(false)
           // Android 11+ won't grant this from the in-app prompt — it has to be
           // chosen in system settings, so say so rather than just failing.
           toast({
@@ -267,12 +279,14 @@ export function DriverProvider({ children }: { children: ReactNode }) {
       if (cancelled) { fn?.(); return }
       stop = fn
       backgroundTrackingRef.current = Boolean(fn)
+      setBackgroundTracking(Boolean(fn))
     })
 
     return () => {
       cancelled = true
       stop?.()
       backgroundTrackingRef.current = false
+      setBackgroundTracking(false)
     }
   }, [session, isOnline])
 
@@ -782,8 +796,9 @@ export function DriverProvider({ children }: { children: ReactNode }) {
     isConnected,
     syncing,
     syncPending: async () => { await retryPendingRef.current?.() },
+    backgroundTracking,
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }), [session, driver, orders, isOnline, justWentOnline, loadingSession, loadingOrders, drawerOpen, refreshOrders, patchOrder, optimizeRoute, liveGps, gpsError, pendingDeliveryCount, isConnected, syncing])
+  }), [session, driver, orders, isOnline, justWentOnline, loadingSession, loadingOrders, drawerOpen, refreshOrders, patchOrder, optimizeRoute, liveGps, gpsError, pendingDeliveryCount, isConnected, syncing, backgroundTracking])
 
   return (
     <DriverContext.Provider value={contextValue}>
