@@ -251,12 +251,22 @@ export function DriverProvider({ children }: { children: ReactNode }) {
         const coords = { lat: fix.latitude, lng: fix.longitude }
         setLiveGps(coords)
         setGpsError(false)
+        // Logged deliberately, not left over from debugging. The native
+        // service can be running and producing fixes while the WebView's JS
+        // is paused, in which case nothing reaches the server and the only
+        // symptom is a marker that stops moving. These two lines are the
+        // difference between "the service isn't running" and "the service is
+        // running but JS never woke up", which are indistinguishable from
+        // dispatch's side and need opposite fixes. Visible via adb logcat.
+        console.log(`[bg-location] fix ${coords.lat.toFixed(5)},${coords.lng.toFixed(5)}`)
         // The plugin already filters by distance, so no extra throttle here.
         void driverFetch("/api/driver/location", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ driverId: sessionId, lat: coords.lat, lng: coords.lng }),
-        }).catch(() => { /* best-effort; the next fix retries */ })
+        })
+          .then((r) => console.log(`[bg-location] posted ${r.status}`))
+          .catch((e) => console.log(`[bg-location] post failed: ${e}`))
       },
       (message, permissionDenied) => {
         setGpsError(true)
