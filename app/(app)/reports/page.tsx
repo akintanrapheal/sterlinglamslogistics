@@ -393,6 +393,38 @@ function DeltaBadge({ current, prev, format: fmt }: { current: number; prev: num
 // Page
 // ---------------------------------------------------------------------------
 
+/**
+ * Plain-language reading of the failure codes sendTwilioMessage and the email
+ * sender return, so a failed notification names the thing to go and fix
+ * rather than only that it failed.
+ */
+function explainNotificationFailure(reason?: string): string {
+  switch (reason) {
+    case "missing_twilio_credentials":
+      return "Twilio account SID or auth token is not configured."
+    case "missing_twilio_sms_from":
+      return "No TWILIO_SMS_FROM number is configured."
+    case "missing_twilio_whatsapp_from":
+      return "No WhatsApp sender configured — set TWILIO_WHATSAPP_FROM or TWILIO_WHATSAPP_MESSAGING_SERVICE_SID."
+    case "invalid_sms_to_number":
+    case "invalid_whatsapp_to_number":
+      return "The customer's phone number could not be read as a valid international number."
+    case "twilio_whatsapp_error":
+      // Twilio 63016 is the common one: WhatsApp forbids free-form
+      // business-initiated messages outside the 24h customer-service window,
+      // so an approved template (ContentSid) is required.
+      return "Twilio rejected the WhatsApp message. If the error mentions 63016, an approved template is required — set TWILIO_WHATSAPP_CONTENT_SID_OUT_FOR_DELIVERY."
+    case "twilio_sms_error":
+      return "Twilio rejected the SMS."
+    case "missing_resend_api_key":
+      return "No RESEND_API_KEY configured."
+    case "disabled":
+      return "This channel is switched off in notification settings."
+    default:
+      return reason ? `Reported reason: ${reason}` : "No reason recorded."
+  }
+}
+
 export default function ReportsPage() {
   const [allOrders, setAllOrders] = useState<Order[]>([])
   const [drivers, setDrivers] = useState<Driver[]>([])
@@ -1057,6 +1089,26 @@ export default function ReportsPage() {
                       Email: {log.email.sent ? "Sent" : "Skipped/Failed"}
                     </Badge>
                   </div>
+
+                  {/* Why a channel failed is already recorded per send — the
+                      config that was missing, or Twilio's own error text — but
+                      it was never rendered, so "Skipped/Failed" was the entire
+                      story and every failure looked the same. */}
+                  {([
+                    ["SMS", log.sms],
+                    ["WhatsApp", log.whatsapp],
+                    ["Email", log.email],
+                  ] as const)
+                    .filter(([, r]) => !r.sent && (r.reason || r.detail))
+                    .map(([name, r]) => (
+                      <p key={name} className="mt-1.5 text-[11px] leading-snug text-muted-foreground">
+                        <span className="font-medium text-foreground">{name}:</span>{" "}
+                        {explainNotificationFailure(r.reason)}
+                        {r.detail && (
+                          <span className="ml-1 break-all opacity-70">— {String(r.detail).slice(0, 300)}</span>
+                        )}
+                      </p>
+                    ))}
                 </div>
               ))}
             </div>
