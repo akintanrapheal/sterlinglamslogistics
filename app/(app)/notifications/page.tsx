@@ -23,6 +23,9 @@ import { cn } from "@/lib/utils"
 type ChannelKey = "sms" | "whatsapp" | "email"
 type StatusFilter = "all" | "sent" | "failed"
 
+/** Rows per page. Small enough that a failure is visible without scrolling. */
+const PAGE_SIZE = 25
+
 const CHANNELS: { key: ChannelKey; label: string; icon: typeof Mail }[] = [
   { key: "whatsapp", label: "WhatsApp", icon: MessageCircle },
   { key: "sms", label: "SMS", icon: MessageSquare },
@@ -95,6 +98,7 @@ export default function NotificationsPage() {
   const [event, setEvent] = useState("all")
   const [search, setSearch] = useState("")
   const [expanded, setExpanded] = useState<string | null>(null)
+  const [page, setPage] = useState(1)
 
   const authedFetch = useCallback(async (url: string) => {
     const token = await auth.currentUser?.getIdToken()
@@ -150,6 +154,19 @@ export default function NotificationsPage() {
       return true
     })
   }, [logs, channel, status, event, search])
+
+  // Any filter change re-slices the list, so a page number carried over from
+  // the previous filter would land on nothing.
+  useEffect(() => {
+    setPage(1)
+  }, [channel, status, event, search])
+
+  const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE))
+  const currentPage = Math.min(page, totalPages)
+  const paged = useMemo(
+    () => filtered.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE),
+    [filtered, currentPage],
+  )
 
   const stats = useMemo(() => {
     const out: Record<ChannelKey, { sent: number; failed: number }> = {
@@ -355,7 +372,9 @@ export default function NotificationsPage() {
       </div>
 
       <p className="text-xs text-muted-foreground">
-        Showing {filtered.length} of {logs.length} attempts
+        Showing {paged.length === 0 ? 0 : (currentPage - 1) * PAGE_SIZE + 1}–
+        {(currentPage - 1) * PAGE_SIZE + paged.length} of {filtered.length} matching
+        {filtered.length !== logs.length && ` (${logs.length} loaded)`}
         {channel !== "all" && ` · ${CHANNELS.find((c) => c.key === channel)?.label} only`}
       </p>
 
@@ -365,7 +384,7 @@ export default function NotificationsPage() {
         </div>
       ) : (
         <div className="space-y-2">
-          {filtered.map((l) => {
+          {paged.map((l) => {
             const isOpen = expanded === l.id
             const failedChannels = (["whatsapp", "sms", "email"] as ChannelKey[]).filter((c) => l[c] && !l[c].sent)
             const when = parseFirestoreDate(l.createdAt)
@@ -462,6 +481,53 @@ export default function NotificationsPage() {
               </div>
             )
           })}
+        </div>
+      )}
+
+      {totalPages > 1 && (
+        <div className="flex flex-wrap items-center justify-center gap-1 pt-1">
+          <button
+            type="button"
+            onClick={() => setPage((p) => Math.max(1, p - 1))}
+            disabled={currentPage === 1}
+            className="rounded-lg border border-border px-3 py-1.5 text-xs font-medium disabled:opacity-40 hover:bg-secondary"
+          >
+            Previous
+          </button>
+
+          {/* A window around the current page rather than every page — with a
+              few hundred logs a full list of numbers would wrap several
+              lines and bury the controls. */}
+          {Array.from({ length: totalPages }, (_, i) => i + 1)
+            .filter((n) => n === 1 || n === totalPages || Math.abs(n - currentPage) <= 1)
+            .map((n, idx, arr) => (
+              <span key={n} className="flex items-center gap-1">
+                {idx > 0 && arr[idx - 1] !== n - 1 && (
+                  <span className="px-1 text-xs text-muted-foreground">…</span>
+                )}
+                <button
+                  type="button"
+                  onClick={() => setPage(n)}
+                  className={cn(
+                    "min-w-8 rounded-lg border px-2.5 py-1.5 text-xs font-medium",
+                    n === currentPage
+                      ? "border-primary bg-primary text-primary-foreground"
+                      : "border-border hover:bg-secondary",
+                  )}
+                >
+                  {n}
+                </button>
+              </span>
+            ))}
+
+          <button
+            type="button"
+            onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+            disabled={currentPage === totalPages}
+            className="rounded-lg border border-border px-3 py-1.5 text-xs font-medium disabled:opacity-40 hover:bg-secondary"
+          >
+            Next
+          </button>
         </div>
       )}
     </div>
