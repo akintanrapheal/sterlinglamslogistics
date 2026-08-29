@@ -17,6 +17,7 @@ import {
   Bell,
   BellOff,
   HelpCircle,
+  BellRing,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { useState, useRef, useEffect } from "react"
@@ -32,6 +33,7 @@ const navItems = [
   { label: "Routes",   href: "/routes",   icon: Route },
   { label: "Reviews",  href: "/reviews",  icon: Star },
   { label: "Reports",  href: "/reports",  icon: BarChart3 },
+  { label: "Notifications", href: "/notifications", icon: BellRing },
 ]
 
 export function AppSidebar() {
