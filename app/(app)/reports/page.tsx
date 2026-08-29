@@ -38,6 +38,8 @@ import {
 import { format, startOfDay, startOfWeek, startOfMonth, subDays, subWeeks, subMonths } from "date-fns"
 import { fetchOrders, fetchDrivers, fetchNotificationLogs } from "@/lib/firestore"
 import type { Order, Driver, NotificationLog } from "@/lib/data"
+import { logisticsRevenue } from "@/lib/data"
+import { cn } from "@/lib/utils"
 
 type Period = "today" | "week" | "month" | "all" | "custom"
 
@@ -167,12 +169,70 @@ function buildDailyBreakdown(orders: Order[], period: "week" | "month" | "custom
     existing.orders++
     if (order.status === "delivered") {
       existing.delivered++
-      existing.revenue += order.amount
+      existing.revenue += logisticsRevenue(order)
     }
     map.set(key, existing)
   }
 
   return Array.from(map.values()).sort((a, b) => a.key.localeCompare(b.key))
+}
+
+type RevenueGrain = "daily" | "weekly" | "monthly" | "yearly"
+
+interface RevenueBucket {
+  key: string
+  label: string
+  revenue: number
+  deliveries: number
+}
+
+/**
+ * Group delivered orders into revenue buckets.
+ *
+ * Keyed on deliveredAt, not createdAt: revenue is earned when the delivery
+ * completes, so an order placed on the 31st and delivered on the 1st belongs
+ * to the new month. Falls back to createdAt only for older records that
+ * predate deliveredAt being written.
+ *
+ * Deliberately spans all orders rather than the page's period filter — the
+ * point of a yearly view is to see beyond the current selection.
+ */
+function buildRevenueBuckets(orders: Order[], grain: RevenueGrain): RevenueBucket[] {
+  const map = new Map<string, RevenueBucket>()
+
+  for (const order of orders) {
+    if (order.status !== "delivered") continue
+    const d = toDate(order.deliveredAt) ?? toDate(order.createdAt)
+    if (!d) continue
+
+    let key: string
+    let label: string
+    if (grain === "daily") {
+      key = format(d, "yyyy-MM-dd")
+      label = format(d, "EEE d MMM yyyy")
+    } else if (grain === "weekly") {
+      // Week starting Sunday, matching the rest of the page's week handling.
+      const start = new Date(d)
+      start.setDate(d.getDate() - d.getDay())
+      start.setHours(0, 0, 0, 0)
+      key = format(start, "yyyy-MM-dd")
+      label = `Week of ${format(start, "d MMM yyyy")}`
+    } else if (grain === "monthly") {
+      key = format(d, "yyyy-MM")
+      label = format(d, "MMMM yyyy")
+    } else {
+      key = format(d, "yyyy")
+      label = key
+    }
+
+    const row = map.get(key) ?? { key, label, revenue: 0, deliveries: 0 }
+    row.revenue += logisticsRevenue(order)
+    row.deliveries++
+    map.set(key, row)
+  }
+
+  // Newest first — the current period is what gets looked at.
+  return Array.from(map.values()).sort((a, b) => b.key.localeCompare(a.key))
 }
 
 interface DriverRow {
@@ -209,7 +269,7 @@ function buildDriverStats(orders: Order[], drivers: Driver[]): DriverRow[] {
     row.assigned++
     if (order.status === "delivered") {
       row.delivered++
-      row.revenue += order.amount
+      row.revenue += logisticsRevenue(order)
       const start = toDate(order.startedAt ?? order.pickedUpAt)
       const end = toDate(order.deliveredAt)
       if (start && end) {
@@ -431,6 +491,7 @@ export default function ReportsPage() {
   const [notificationLogs, setNotificationLogs] = useState<NotificationLog[]>([])
   const [isLoading, setIsLoading] = useState(true)
   const [period, setPeriod] = useState<Period>("all")
+  const [revenueGrain, setRevenueGrain] = useState<RevenueGrain>("monthly")
   const [customRange, setCustomRange] = useState<{ from: Date | undefined; to: Date | undefined }>({ from: undefined, to: undefined })
   const [calendarOpen, setCalendarOpen] = useState(false)
 
@@ -452,6 +513,10 @@ export default function ReportsPage() {
     loadData()
   }, [])
 
+  // Intentionally over all orders, not the period-filtered set: a yearly
+  // view is meaningless if it can only see the current selection.
+  const revenueBuckets = useMemo(() => buildRevenueBuckets(allOrders, revenueGrain), [allOrders, revenueGrain])
+
   const { start, end } = useMemo(() => getPeriodBounds(period, customRange), [period, customRange])
   const { start: prevStart, end: prevEnd } = useMemo(() => getPrevPeriodBounds(period), [period])
 
@@ -461,8 +526,8 @@ export default function ReportsPage() {
   const deliveredOrders = useMemo(() => filteredOrders.filter((o) => o.status === "delivered"), [filteredOrders])
   const prevDelivered = useMemo(() => prevOrders.filter((o) => o.status === "delivered"), [prevOrders])
 
-  const totalRevenue = useMemo(() => deliveredOrders.reduce((s, o) => s + o.amount, 0), [deliveredOrders])
-  const prevRevenue = useMemo(() => prevDelivered.reduce((s, o) => s + o.amount, 0), [prevDelivered])
+  const totalRevenue = useMemo(() => deliveredOrders.reduce((s, o) => s + logisticsRevenue(o), 0), [deliveredOrders])
+  const prevRevenue = useMemo(() => prevDelivered.reduce((s, o) => s + logisticsRevenue(o), 0), [prevDelivered])
 
   const deliveryRate = filteredOrders.length
     ? Math.round((deliveredOrders.length / filteredOrders.length) * 100)
@@ -628,13 +693,13 @@ export default function ReportsPage() {
 
         <Card>
           <CardHeader className="pb-2">
-            <CardTitle className="text-base">Revenue from Delivered</CardTitle>
+            <CardTitle className="text-base">Logistics Revenue</CardTitle>
           </CardHeader>
           <CardContent>
             <div className="flex flex-col gap-2">
               <span className="text-4xl font-bold text-foreground">{formatCurrency(totalRevenue)}</span>
               <p className="text-xs text-muted-foreground">
-                Collected from delivered orders
+                Delivery fees and tips on delivered orders
                 {period !== "all" && ` — ${PERIOD_LABELS[period].toLowerCase()}`}
               </p>
               {showComparison && (
@@ -644,6 +709,91 @@ export default function ReportsPage() {
           </CardContent>
         </Card>
       </div>
+
+      {/* ── Logistics revenue by period ── */}
+      <Card>
+        <CardHeader className="pb-2">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <CardTitle className="text-base">Logistics Revenue by Period</CardTitle>
+              <p className="mt-0.5 text-xs text-muted-foreground">
+                Delivery fees and tips, counted when the delivery completed. Covers all
+                orders, not the filter above.
+              </p>
+            </div>
+            <div className="flex rounded-lg border border-border p-0.5">
+              {(["daily", "weekly", "monthly", "yearly"] as RevenueGrain[]).map((g) => (
+                <button
+                  key={g}
+                  type="button"
+                  onClick={() => setRevenueGrain(g)}
+                  className={cn(
+                    "rounded-md px-3 py-1.5 text-xs font-medium capitalize transition-colors",
+                    revenueGrain === g
+                      ? "bg-primary text-primary-foreground"
+                      : "text-muted-foreground hover:text-foreground",
+                  )}
+                >
+                  {g}
+                </button>
+              ))}
+            </div>
+          </div>
+        </CardHeader>
+        <CardContent>
+          {revenueBuckets.length === 0 ? (
+            <p className="py-8 text-center text-sm text-muted-foreground">
+              No delivered orders with delivery fees recorded yet.
+            </p>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b border-border text-left text-xs text-muted-foreground">
+                    <th className="pb-2 pr-4 font-medium">Period</th>
+                    <th className="pb-2 pr-4 text-right font-medium">Deliveries</th>
+                    <th className="pb-2 pr-4 text-right font-medium">Revenue</th>
+                    <th className="pb-2 text-right font-medium">Avg / delivery</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {revenueBuckets.slice(0, 24).map((b) => (
+                    <tr key={b.key} className="border-b border-border/50 last:border-0">
+                      <td className="py-2 pr-4 font-medium text-foreground">{b.label}</td>
+                      <td className="py-2 pr-4 text-right text-muted-foreground">{b.deliveries}</td>
+                      <td className="py-2 pr-4 text-right font-semibold text-foreground">
+                        {formatCurrency(b.revenue)}
+                      </td>
+                      <td className="py-2 text-right text-muted-foreground">
+                        {formatCurrency(b.deliveries > 0 ? b.revenue / b.deliveries : 0)}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+                <tfoot>
+                  <tr className="border-t-2 border-border">
+                    <td className="pt-2 pr-4 text-xs font-semibold">
+                      Total ({revenueBuckets.length} {revenueGrain === "daily" ? "days" : revenueGrain === "weekly" ? "weeks" : revenueGrain === "monthly" ? "months" : "years"})
+                    </td>
+                    <td className="pt-2 pr-4 text-right text-xs font-semibold">
+                      {revenueBuckets.reduce((sum, b) => sum + b.deliveries, 0)}
+                    </td>
+                    <td className="pt-2 pr-4 text-right text-xs font-bold text-foreground">
+                      {formatCurrency(revenueBuckets.reduce((sum, b) => sum + b.revenue, 0))}
+                    </td>
+                    <td />
+                  </tr>
+                </tfoot>
+              </table>
+              {revenueBuckets.length > 24 && (
+                <p className="mt-2 text-xs text-muted-foreground">
+                  Showing the 24 most recent of {revenueBuckets.length} periods.
+                </p>
+              )}
+            </div>
+          )}
+        </CardContent>
+      </Card>
 
       {/* ── Revenue Bar Chart with moving average ── */}
       {chartData.length > 0 && (

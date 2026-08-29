@@ -110,6 +110,22 @@ export interface NotificationLog {
   createdAt?: unknown
 }
 
+/**
+ * What the logistics business actually earns on an order.
+ *
+ * `amount` is the full order value — merchandise plus fees — which belongs to
+ * the store, not to us. Reporting it as revenue overstates earnings by the
+ * entire basket value, so a 16,950 order with a 2,000 delivery fee read as
+ * 16,950 of logistics income.
+ *
+ * Tips are included because they are paid to the courier for the delivery
+ * itself. Orders predating these fields contribute 0 rather than falling back
+ * to `amount`, which would silently reintroduce the same overstatement.
+ */
+export function logisticsRevenue(order: Pick<Order, "deliveryFees" | "deliveryTips">): number {
+  return (order.deliveryFees ?? 0) + (order.deliveryTips ?? 0)
+}
+
 export function formatCurrency(amount: number): string {
   return new Intl.NumberFormat("en-NG", {
     style: "currency",
