@@ -57,6 +57,11 @@ export const ROUTE_PERMISSIONS: Record<string, UserRole[]> = {
   "/routes":     ["owner", "admin", "dispatcher", "operations_manager"],
   "/reviews":    ["owner", "admin", "dispatcher", "operations_manager", "accountant", "viewer"],
   "/reports":    ["owner", "admin", "operations_manager", "accountant", "viewer"],
+  // Notification logs expose customer phone numbers and email addresses, and
+  // the delivery config panel names which credentials are unset — so this is
+  // scoped to the same audience as notification settings rather than to
+  // everyone who can read reports.
+  "/notifications": ["owner", "admin", "operations_manager"],
   "/settings":   ["owner", "admin"],
 }
 

@@ -1065,7 +1065,11 @@ export default function ReportsPage() {
             <p className="text-sm text-muted-foreground">No notification logs yet.</p>
           ) : (
             <div className="space-y-3">
-              {notificationLogs.map((log) => (
+              {/* Summary only. The full history, per-channel filters, failure
+                  reasons and the delivery-configuration check live on
+                  /notifications — this card is for noticing a problem, that
+                  page is for diagnosing it. */}
+              {notificationLogs.slice(0, 5).map((log) => (
                 <div key={log.id} className="rounded-lg border border-border p-3">
                   <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                     <div>
@@ -1113,6 +1117,12 @@ export default function ReportsPage() {
               ))}
             </div>
           )}
+          <a
+            href="/notifications"
+            className="mt-3 inline-flex items-center gap-1.5 text-xs font-medium text-primary hover:underline"
+          >
+            Open full notification logs
+          </a>
         </CardContent>
       </Card>
     </div>
