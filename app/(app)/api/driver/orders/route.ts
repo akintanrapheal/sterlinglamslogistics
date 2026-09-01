@@ -63,22 +63,38 @@ export async function GET(req: Request) {
       return NextResponse.json({ ok: true, orders: activeOrders })
     }
 
-    // History, newest first. This pairs an equality filter with an orderBy on
-    // another field, which Firestore only serves with a composite index (see
-    // firestore.indexes.json). If that index hasn't been deployed the query is
-    // rejected outright, so fall back to an unordered page rather than failing
-    // the whole request — history is then approximate instead of absent, and
-    // the active orders above are unaffected either way.
+    // History, ordered by when the delivery completed rather than when the
+    // order was created.
+    //
+    // Ordering by createdAt made the window "the 200 most recently created
+    // orders", so an older order delivered today fell outside it once 200
+    // newer orders existed — the driver's Completed Orders simply stopped
+    // updating while the endpoint reported success. deliveredAt is the field
+    // this screen actually sorts and groups by, so it is the one that should
+    // bound the page.
+    //
+    // Firestore omits documents missing the ordered field, which is correct
+    // here: undelivered orders are not history, and the active ones are
+    // fetched separately above and merged below.
+    //
+    // Needs a composite index (see firestore.indexes.json). If it hasn't been
+    // deployed the query is rejected outright, so fall back to an unordered
+    // page rather than failing the request — history is then approximate
+    // instead of absent, and active orders are unaffected either way.
     let historyDocs: FirebaseFirestore.QueryDocumentSnapshot[] = []
     try {
-      const snap = await base.orderBy("createdAt", "desc").limit(MAX_HISTORY_ORDERS).get()
+      const snap = await base.orderBy("deliveredAt", "desc").limit(MAX_HISTORY_ORDERS).get()
       historyDocs = snap.docs
     } catch (err) {
       log.warn(
         { err, driverId },
-        "Ordered history query failed — falling back to unordered page. Deploy the assignedDriver+createdAt index.",
+        "Ordered history query failed — falling back to unordered page. Deploy the assignedDriver+deliveredAt index.",
       )
-      const snap = await base.limit(MAX_HISTORY_ORDERS).get()
+      // Narrow the unordered fallback to delivered orders. Without an
+      // orderBy the limit selects by document id, so the page is arbitrary
+      // either way — but an arbitrary page of history beats one padded with
+      // cancelled and failed orders that this screen never shows.
+      const snap = await base.where("status", "==", "delivered").limit(MAX_HISTORY_ORDERS).get()
       historyDocs = snap.docs
     }
 
@@ -92,9 +108,13 @@ export async function GET(req: Request) {
       const t = v as { _seconds?: number; seconds?: number }
       return (t._seconds ?? t.seconds ?? 0) * 1000
     }
-    const orders = [...byId.values()].sort(
-      (a, b) => ms((b as { createdAt?: unknown }).createdAt) - ms((a as { createdAt?: unknown }).createdAt),
-    )
+    // Sort on the same field the window is bounded by, so the order the client
+    // sees matches the order the page was selected in. Active orders have no
+    // deliveredAt, so they fall back to createdAt and sort to the top, which
+    // is where current work belongs.
+    const sortKey = (o: Record<string, unknown>) =>
+      ms(o.deliveredAt) || ms(o.createdAt)
+    const orders = [...byId.values()].sort((a, b) => sortKey(b) - sortKey(a))
 
     return NextResponse.json({ ok: true, orders })
   } catch (error) {
