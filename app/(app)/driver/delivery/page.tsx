@@ -375,6 +375,10 @@ export default function DeliveryCompletionPage() {
       ...(liveGps ? { deliveryLat: liveGps.lat, deliveryLng: liveGps.lng } : {}),
     }
 
+    // Captured so the catch below can distinguish a server error that will
+    // heal from a rejection that never will.
+    let httpStatus: number | null = null
+
     try {
       const res = await driverFetch(`/api/driver/orders/${encodeURIComponent(order.id)}/status`, {
         method: "POST",
@@ -383,6 +387,7 @@ export default function DeliveryCompletionPage() {
       })
 
       if (!res.ok) {
+        httpStatus = res.status
         const data = await res.json().catch(() => ({}))
         throw new Error((data as { error?: string }).error ?? "Failed to complete delivery")
       }
@@ -395,9 +400,23 @@ export default function DeliveryCompletionPage() {
       patchOrder(order.id, { status: "delivered" })
       router.push("/driver/dashboard")
     } catch (err) {
-      // Network failure — queue for automatic retry when connectivity returns
-      const isNetworkError = !navigator.onLine || (err instanceof TypeError)
-      if (isNetworkError) {
+      // Queue whenever the failure might heal — not only on network errors.
+      //
+      // This previously queued only when navigator.onLine was false or the
+      // error was a TypeError. A server error throws a plain Error with the
+      // device still online, so every 5xx fell through to the "else" branch
+      // and the proof of delivery — photo, signature, signer, notes, GPS —
+      // was discarded outright. During the Firestore outage that rejected
+      // every write with a 500, each completed delivery was thrown away with
+      // nothing but a toast, and the driver had no way to recover it.
+      //
+      // 5xx, 429 and 408 are transient by definition, so they queue and
+      // replay. Other 4xx mean the server understood and refused, which
+      // retrying cannot fix, so those still surface as an error.
+      const offline = !navigator.onLine || err instanceof TypeError
+      const serverMayRecover =
+        httpStatus !== null && (httpStatus >= 500 || httpStatus === 429 || httpStatus === 408)
+      if (offline || serverMayRecover) {
         queueDelivery({
           id: `${order.id}_${Date.now()}`,
           orderId: order.id,
@@ -417,8 +436,10 @@ export default function DeliveryCompletionPage() {
         })
         void hapticSuccess()
         toast({
-          title: "Saved offline",
-          description: `${order.orderNumber} will be submitted automatically when you reconnect.`,
+          title: "Saved on this phone",
+          description: offline
+            ? `${order.orderNumber} will be submitted automatically when you reconnect.`
+            : `The server is unavailable. ${order.orderNumber} will be submitted automatically once it recovers.`,
         })
         // The write is queued and will replay, so reflect it now — otherwise
         // the order sits on the Orders tab looking undelivered.

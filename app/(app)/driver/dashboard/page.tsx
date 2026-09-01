@@ -162,6 +162,9 @@ export default function DriverDashboard() {
   ) {
     if (!session || inFlightRef.current.has(order.id)) return
     const previousStatus = order.status
+    // Captured so the catch can tell a server error that will heal from a
+    // rejection that never will.
+    let httpStatus: number | null = null
     inFlightRef.current.add(order.id)
     void hapticTap("medium")
     patchOrder(order.id, { status: next })
@@ -172,14 +175,24 @@ export default function DriverDashboard() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ driverId: session.id, status: next }),
       })
-      if (!res.ok) throw new Error(`Failed to mark ${next}`)
+      if (!res.ok) {
+        httpStatus = res.status
+        throw new Error(`Failed to mark ${next}`)
+      }
       void hapticSuccess()
       // Customer WhatsApp + SMS + email are dispatched server-side from the
       // /api/driver/orders/[orderId]/status route after the in-transit update.
       toast(successToast)
     } catch (err) {
-      const isNetworkError = !navigator.onLine || err instanceof TypeError
-      if (isNetworkError) {
+      // Queue whenever the failure might heal, not only on network errors.
+      // A server error throws a plain Error with the device still online, so
+      // every 5xx used to fall through to the rollback below and the status
+      // change was lost — during the Firestore outage that rejected every
+      // write, nothing a driver pressed was kept.
+      const offline = !navigator.onLine || err instanceof TypeError
+      const serverMayRecover =
+        httpStatus !== null && (httpStatus >= 500 || httpStatus === 429 || httpStatus === 408)
+      if (offline || serverMayRecover) {
         queueStatusUpdate({
           id: `${order.id}_${Date.now()}`,
           orderId: order.id,
