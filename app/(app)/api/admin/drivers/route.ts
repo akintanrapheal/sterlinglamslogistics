@@ -5,7 +5,7 @@ import { hashPassword } from "@/lib/password"
 import { DRIVER_STATUS } from "@/lib/constants"
 import { audit } from "@/lib/audit"
 import { createLogger } from "@/lib/logger"
-import { checkRateLimit, getRateLimitIdentifier } from "@/lib/rate-limit"
+import { checkAdminApiRateLimit } from "@/lib/rate-limit"
 import type { Driver } from "@/lib/data"
 
 const log = createLogger("api:admin:drivers")
@@ -13,9 +13,6 @@ const log = createLogger("api:admin:drivers")
 type Action = "create" | "update" | "delete" | "reset_password" | "set_offline"
 
 export async function POST(req: Request) {
-  const rl = await checkRateLimit(getRateLimitIdentifier(req))
-  if (rl) return rl
-
   const admin = await verifyAdmin(req)
   if (!admin) {
     return NextResponse.json({ ok: false, error: "Unauthorized" }, { status: 401 })

@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server"
 import { verifyAdmin } from "@/lib/server/auth"
-import { checkRateLimit, getRateLimitIdentifier } from "@/lib/rate-limit"
+import { checkAdminApiRateLimit } from "@/lib/rate-limit"
 import { getServerMapsKey, invalidateMapsKeyCache } from "@/lib/server/maps-key"
 import { createLogger } from "@/lib/logger"
 
@@ -22,11 +22,14 @@ const REMEDY: Record<string, string> = {
 }
 
 export async function POST(req: Request) {
-  const rateLimitResponse = await checkRateLimit(getRateLimitIdentifier(req))
-  if (rateLimitResponse) return rateLimitResponse
-
   const admin = await verifyAdmin(req)
   if (!admin) return NextResponse.json({ ok: false, error: "Unauthorized" }, { status: 401 })
+
+  // Keyed on the admin, not their IP. The shared IP bucket was 20/min
+  // across every admin endpoint, which ordinary navigation exceeds and which
+  // two admins in one office consumed between them.
+  const rl = await checkAdminApiRateLimit(admin.uid)
+  if (rl) return rl
 
   // A key may be supplied to test *before* saving it; otherwise test the
   // currently active one.

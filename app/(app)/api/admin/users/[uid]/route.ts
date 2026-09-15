@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server"
 import { adminAuth, adminDb } from "@/lib/server/firebase-admin"
 import { verifyManager } from "@/lib/server/auth"
-import { checkRateLimit, getRateLimitIdentifier } from "@/lib/rate-limit"
+import { checkAdminApiRateLimit } from "@/lib/rate-limit"
 import { INVITABLE_ROLES, ROLES, type UserRole } from "@/lib/roles"
 import { audit } from "@/lib/audit"
 import { createLogger } from "@/lib/logger"
@@ -59,11 +59,12 @@ type Params = { params: Promise<{ uid: string }> }
  *   { action: "toggle_disabled" }
  */
 export async function PATCH(req: Request, { params }: Params) {
-  const rl = await checkRateLimit(getRateLimitIdentifier(req))
-  if (rl) return rl
-
   const admin = await verifyManager(req)
   if (!admin) return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
+
+  // Per-user, not per-IP — see checkAdminApiRateLimit.
+  const rl = await checkAdminApiRateLimit(admin.uid)
+  if (rl) return rl
 
   const { uid } = await params
   if (!uid) return NextResponse.json({ error: "uid is required" }, { status: 400 })
@@ -152,11 +153,12 @@ export async function PATCH(req: Request, { params }: Params) {
 
 /** DELETE /api/admin/users/[uid] — remove user from Firebase Auth + Firestore */
 export async function DELETE(req: Request, { params }: Params) {
-  const rl = await checkRateLimit(getRateLimitIdentifier(req))
-  if (rl) return rl
-
   const admin = await verifyManager(req)
   if (!admin) return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
+
+  // Per-user, not per-IP — see checkAdminApiRateLimit.
+  const rl = await checkAdminApiRateLimit(admin.uid)
+  if (rl) return rl
 
   const { uid } = await params
   if (!uid) return NextResponse.json({ error: "uid is required" }, { status: 400 })

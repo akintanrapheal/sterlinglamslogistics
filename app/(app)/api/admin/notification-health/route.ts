@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server"
 import { verifyAdmin } from "@/lib/server/auth"
-import { checkRateLimit, getRateLimitIdentifier } from "@/lib/rate-limit"
+import { checkAdminApiRateLimit } from "@/lib/rate-limit"
 
 /**
  * Which notification senders are configured, and what that means.
@@ -28,11 +28,14 @@ interface Check {
 }
 
 export async function GET(req: Request) {
-  const rl = await checkRateLimit(getRateLimitIdentifier(req))
-  if (rl) return rl
-
   const admin = await verifyAdmin(req)
   if (!admin) return NextResponse.json({ ok: false, error: "Unauthorized" }, { status: 401 })
+
+  // Keyed on the admin, not their IP. The shared IP bucket was 20/min
+  // across every admin endpoint, which ordinary navigation exceeds and which
+  // two admins in one office consumed between them.
+  const rl = await checkAdminApiRateLimit(admin.uid)
+  if (rl) return rl
 
   const accountSid = set(process.env.TWILIO_ACCOUNT_SID)
   const authToken = set(process.env.TWILIO_AUTH_TOKEN)
