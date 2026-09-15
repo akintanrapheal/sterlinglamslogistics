@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server"
 import { adminDb } from "@/lib/server/firebase-admin"
 import { verifyAdmin, verifyManager } from "@/lib/server/auth"
-import { checkRateLimit, getRateLimitIdentifier } from "@/lib/rate-limit"
+import { checkAdminApiRateLimit } from "@/lib/rate-limit"
 import { audit, type AuditAction } from "@/lib/audit"
 import { createLogger } from "@/lib/logger"
 
@@ -35,9 +35,6 @@ function toIso(value: unknown): string | null {
 
 /** GET /api/admin/activity — recent audit entries (owner/admin only). */
 export async function GET(req: Request) {
-  const rl = await checkRateLimit(getRateLimitIdentifier(req))
-  if (rl) return rl
-
   const manager = await verifyManager(req)
   if (!manager) return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
 
@@ -81,9 +78,6 @@ export async function GET(req: Request) {
  * taken from the verified token, never from the request body.
  */
 export async function POST(req: Request) {
-  const rl = await checkRateLimit(getRateLimitIdentifier(req))
-  if (rl) return rl
-
   const admin = await verifyAdmin(req)
   if (!admin) return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
 

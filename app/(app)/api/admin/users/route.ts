@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server"
 import { adminAuth, adminDb } from "@/lib/server/firebase-admin"
 import { verifyManager } from "@/lib/server/auth"
-import { checkRateLimit, getRateLimitIdentifier } from "@/lib/rate-limit"
+import { checkAdminApiRateLimit } from "@/lib/rate-limit"
 import { INVITABLE_ROLES, ROLES, type UserRole } from "@/lib/roles"
 import { audit } from "@/lib/audit"
 import { createLogger } from "@/lib/logger"
@@ -61,11 +61,12 @@ async function sendInviteEmail(opts: {
 
 /** GET /api/admin/users — list all admin team members */
 export async function GET(req: Request) {
-  const rl = await checkRateLimit(getRateLimitIdentifier(req))
-  if (rl) return rl
-
   const admin = await verifyManager(req)
   if (!admin) return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
+
+  // Per-user, not per-IP — see checkAdminApiRateLimit.
+  const rl = await checkAdminApiRateLimit(admin.uid)
+  if (rl) return rl
 
   try {
     // List all Firebase Auth users that have admin:true custom claim
@@ -117,11 +118,12 @@ export async function GET(req: Request) {
 
 /** POST /api/admin/users — create a new team member and send invite email */
 export async function POST(req: Request) {
-  const rl = await checkRateLimit(getRateLimitIdentifier(req))
-  if (rl) return rl
-
   const admin = await verifyManager(req)
   if (!admin) return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
+
+  // Per-user, not per-IP — see checkAdminApiRateLimit.
+  const rl = await checkAdminApiRateLimit(admin.uid)
+  if (rl) return rl
 
   let body: { email?: string; name?: string; role?: UserRole }
   try {

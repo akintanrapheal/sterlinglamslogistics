@@ -2,14 +2,11 @@ import { NextResponse } from "next/server"
 import { verifyAdmin } from "@/lib/server/auth"
 import { adminSaveOptimizedRouteOrder } from "@/lib/server/firestore-admin"
 import { createLogger } from "@/lib/logger"
-import { checkRateLimit, getRateLimitIdentifier } from "@/lib/rate-limit"
+import { checkAdminApiRateLimit } from "@/lib/rate-limit"
 
 const log = createLogger("api:admin:dispatch:reorder")
 
 export async function POST(req: Request) {
-  const rl = await checkRateLimit(getRateLimitIdentifier(req))
-  if (rl) return rl
-
   const admin = await verifyAdmin(req)
   if (!admin) {
     return NextResponse.json({ ok: false, error: "Unauthorized" }, { status: 401 })

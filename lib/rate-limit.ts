@@ -8,6 +8,7 @@ const log = createLogger("rate-limit")
 let ratelimit: Ratelimit | null = null
 let driverLocationRatelimit: Ratelimit | null = null
 let driverApiRatelimit: Ratelimit | null = null
+let adminApiRatelimit: Ratelimit | null = null
 
 function getRateLimiter() {
   if (ratelimit) return ratelimit
@@ -113,6 +114,66 @@ export async function checkDriverApiRateLimit(driverId: string): Promise<NextRes
     return null
   } catch (err) {
     log.error({ err }, "Driver API rate limit check failed — allowing request")
+    return null
+  }
+}
+
+/**
+ * Limiter for authenticated admin API calls, keyed per user.
+ *
+ * These endpoints shared the generic 20 req/60 s IP bucket, which ordinary
+ * admin work exceeds on its own: opening Dispatch, Orders, Drivers and
+ * Notifications in quick succession is easily a dozen calls, and a page that
+ * assigns or reorders adds more. Because the bucket was keyed on IP, two
+ * admins in the same office also consumed each other's allowance, and the
+ * symptom was a 429 with nothing to explain it.
+ *
+ * 300/min per user is generous for a human clicking through an admin panel
+ * while still bounding a runaway client or a leaked session.
+ */
+function getAdminApiLimiter() {
+  if (adminApiRatelimit) return adminApiRatelimit
+
+  const url = process.env.UPSTASH_REDIS_REST_URL
+  const token = process.env.UPSTASH_REDIS_REST_TOKEN
+  if (!url || !token) return null
+
+  adminApiRatelimit = new Ratelimit({
+    redis: new Redis({ url, token }),
+    limiter: Ratelimit.slidingWindow(300, "60 s"),
+    analytics: true,
+  })
+
+  return adminApiRatelimit
+}
+
+/**
+ * Rate limit an authenticated admin API call. Call after verifyAdmin, so the
+ * bucket is keyed on the user rather than an IP shared by a whole office.
+ */
+export async function checkAdminApiRateLimit(uid: string): Promise<NextResponse | null> {
+  const limiter = getAdminApiLimiter()
+  if (!limiter) return null
+
+  try {
+    const result = await limiter.limit(`admin:${uid}`)
+    if (!result.success) {
+      log.warn({ uid, remaining: result.remaining }, "Admin API rate limit exceeded")
+      return NextResponse.json(
+        { ok: false, error: "Too many requests. Please try again in a moment." },
+        {
+          status: 429,
+          headers: {
+            "X-RateLimit-Limit": String(result.limit),
+            "X-RateLimit-Remaining": String(result.remaining),
+            "X-RateLimit-Reset": String(result.reset),
+          },
+        },
+      )
+    }
+    return null
+  } catch (err) {
+    log.error({ err }, "Admin API rate limit check failed — allowing request")
     return null
   }
 }

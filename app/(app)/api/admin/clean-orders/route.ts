@@ -3,14 +3,11 @@ import { adminCleanOrderNumbersWC, adminRemoveDuplicateOrders, adminBackfillOrde
 import { createLogger } from "@/lib/logger"
 import { audit } from "@/lib/audit"
 import { verifyAdmin } from "@/lib/server/auth"
-import { checkRateLimit, getRateLimitIdentifier } from "@/lib/rate-limit"
+import { checkAdminApiRateLimit } from "@/lib/rate-limit"
 
 const log = createLogger("api:admin:clean-orders")
 
 export async function POST(req: Request) {
-  const rateLimitResponse = await checkRateLimit(getRateLimitIdentifier(req))
-  if (rateLimitResponse) return rateLimitResponse
-
   const admin = await verifyAdmin(req)
   if (!admin) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 })

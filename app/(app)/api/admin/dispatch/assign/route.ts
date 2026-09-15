@@ -4,7 +4,7 @@ import { adminFetchOrder, adminUpdateOrder, adminFetchDriverById } from "@/lib/s
 import { ORDER_STATUS } from "@/lib/constants"
 import { createLogger } from "@/lib/logger"
 import { notifyOrderEventServer } from "@/lib/server/notify-order-event"
-import { checkRateLimit, getRateLimitIdentifier } from "@/lib/rate-limit"
+import { checkAdminApiRateLimit } from "@/lib/rate-limit"
 import { audit } from "@/lib/audit"
 
 const log = createLogger("api:admin:dispatch:assign")
@@ -16,9 +16,6 @@ function buildTrackingUrl(req: Request, orderNumber: string, orderId: string): s
 }
 
 export async function POST(req: Request) {
-  const rl = await checkRateLimit(getRateLimitIdentifier(req))
-  if (rl) return rl
-
   const admin = await verifyAdmin(req)
   if (!admin) {
     return NextResponse.json({ ok: false, error: "Unauthorized" }, { status: 401 })
