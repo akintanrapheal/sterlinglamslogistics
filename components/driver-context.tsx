@@ -86,6 +86,34 @@ const RETRY_MAX_MS = 5 * 60_000
 const ORDER_POLL_MS = 45_000
 
 /**
+ * Trail recording thresholds.
+ *
+ * Live pings are far more frequent than a history needs — every few seconds
+ * in the foreground — so the device decides which fixes are worth keeping.
+ * Doing it here costs nothing; doing it on the server would mean reading the
+ * previous point on every ping just to discard most of them.
+ *
+ * 40m or 90s keeps a recognisable route through city driving while bounding
+ * an eight-hour shift to a few hundred points rather than several thousand.
+ * A stationary driver contributes one point every 90s, which is what makes
+ * stop detection possible without recording every idle second.
+ */
+const TRAIL_MIN_METRES = 40
+const TRAIL_MIN_MS = 90_000
+
+/** Metres between two coordinates (haversine). */
+function metresBetween(a: { lat: number; lng: number }, b: { lat: number; lng: number }): number {
+  const R = 6_371_000
+  const toRad = (d: number) => (d * Math.PI) / 180
+  const dLat = toRad(b.lat - a.lat)
+  const dLng = toRad(b.lng - a.lng)
+  const h =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(toRad(a.lat)) * Math.cos(toRad(b.lat)) * Math.sin(dLng / 2) ** 2
+  return 2 * R * Math.asin(Math.sqrt(h))
+}
+
+/**
  * Profile poll. Reads a single document, but at 10s it was 8,640 reads/day
  * per driver on its own — the largest fixed cost in the app for data that
  * changes rarely.
@@ -160,6 +188,9 @@ export function DriverProvider({ children }: { children: ReactNode }) {
   // True once the native foreground service is reporting, so the WebView
   // watcher stands down instead of duplicating every write.
   const backgroundTrackingRef = useRef(false)
+  // Last fix actually written to history, so the thresholds above can be
+  // applied without asking the server what it already has.
+  const lastTrailRef = useRef<{ lat: number; lng: number; at: number } | null>(null)
   const [backgroundTracking, setBackgroundTracking] = useState(false)
 
   // Load session from localStorage
@@ -263,7 +294,13 @@ export function DriverProvider({ children }: { children: ReactNode }) {
         void driverFetch("/api/driver/location", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ driverId: sessionId, lat: coords.lat, lng: coords.lng }),
+          body: JSON.stringify({
+            driverId: sessionId,
+            lat: coords.lat,
+            lng: coords.lng,
+            trail: shouldRecordTrail(coords),
+            ...(typeof fix.accuracy === "number" ? {} : {}),
+          }),
         })
           .then((r) => console.log(`[bg-location] posted ${r.status}`))
           .catch((e) => console.log(`[bg-location] post failed: ${e}`))
@@ -323,7 +360,12 @@ export function DriverProvider({ children }: { children: ReactNode }) {
           await driverFetch("/api/driver/location", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ driverId: sessionId, lat: coords.lat, lng: coords.lng }),
+            body: JSON.stringify({
+              driverId: sessionId,
+              lat: coords.lat,
+              lng: coords.lng,
+              trail: shouldRecordTrail(coords),
+            }),
           })
         } catch { /* silently ignore */ }
       },
@@ -349,7 +391,15 @@ export function DriverProvider({ children }: { children: ReactNode }) {
           await driverFetch("/api/driver/location", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ driverId: sessionId, lat: coords.lat, lng: coords.lng }),
+            body: JSON.stringify({
+              driverId: sessionId,
+              lat: coords.lat,
+              lng: coords.lng,
+              trail: shouldRecordTrail(coords),
+              ...(typeof pos.coords.speed === "number" && pos.coords.speed >= 0
+                ? { speed: pos.coords.speed }
+                : {}),
+            }),
           })
         } catch { /* best-effort */ }
       },
@@ -524,6 +574,20 @@ export function DriverProvider({ children }: { children: ReactNode }) {
       setOrders((prev) => (prev.length > 0 ? prev : cached))
     }
   }, [session])
+
+  /**
+   * Whether this fix should be added to the driver's location history, and
+   * remember it if so. Called for every live ping.
+   */
+  const shouldRecordTrail = useCallback((coords: { lat: number; lng: number }) => {
+    const now = Date.now()
+    const last = lastTrailRef.current
+    if (last && now - last.at < TRAIL_MIN_MS && metresBetween(last, coords) < TRAIL_MIN_METRES) {
+      return false
+    }
+    lastTrailRef.current = { ...coords, at: now }
+    return true
+  }, [])
 
   const patchOrder = useCallback((orderId: string, changes: Partial<Order>) => {
     setOrders((prev) => {
