@@ -55,6 +55,9 @@ export const ROUTE_PERMISSIONS: Record<string, UserRole[]> = {
   "/orders":     ["owner", "admin", "dispatcher", "operations_manager", "accountant", "viewer"],
   "/drivers":    ["owner", "admin", "dispatcher", "operations_manager"],
   "/routes":     ["owner", "admin", "dispatcher", "operations_manager"],
+  // Driver movement history. Same audience as Routes — it is an operational
+  // view of where drivers went, not a reporting surface.
+  "/tracking":   ["owner", "admin", "dispatcher", "operations_manager"],
   "/reviews":    ["owner", "admin", "dispatcher", "operations_manager", "accountant", "viewer"],
   "/reports":    ["owner", "admin", "operations_manager", "accountant", "viewer"],
   // Notification logs expose customer phone numbers and email addresses, and
