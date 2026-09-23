@@ -9,7 +9,7 @@ import { driverFetch, clearDriverToken } from "@/lib/driver-client"
 import { getPendingDeliveries, removePendingDelivery, pendingDeliveryCount as getPendingCount } from "@/lib/delivery-queue"
 import { getPendingStatusUpdates, removeStatusUpdate, pendingStatusCount } from "@/lib/status-queue"
 import { loadCachedOrders, saveCachedOrders, clearCachedOrders } from "@/lib/order-cache"
-import { onAppResume, startBackgroundLocation } from "@/lib/native-bridge"
+import { onAppResume, startBackgroundLocation, getDeviceProtection, clearDeviceAdminFlag } from "@/lib/native-bridge"
 import { enqueueTrailPoint, flushTrailQueue, queuedTrailCount } from "@/lib/trail-queue"
 
 interface DriverSession {
@@ -108,6 +108,15 @@ const TRAIL_MIN_MS = 60_000
 
 /** How often buffered history is uploaded while a connection is available. */
 const TRAIL_FLUSH_MS = 2 * 60_000
+
+/**
+ * How often the phone reports whether it is still protected from uninstall.
+ *
+ * Infrequent on purpose — this changes rarely, and the one moment that
+ * matters (rights being revoked) is captured on the device and carried on the
+ * next report regardless of when that lands.
+ */
+const DEVICE_STATUS_MS = 15 * 60_000
 
 /** Metres between two coordinates (haversine). */
 function metresBetween(a: { lat: number; lng: number }, b: { lat: number; lng: number }): number {
@@ -788,6 +797,41 @@ export function DriverProvider({ children }: { children: ReactNode }) {
   // Upload buffered history: periodically, on reconnect, and on resume. A
   // device returning from a dead zone can carry hours of points, so this is
   // deliberately independent of the order poll, which only runs on shift.
+  /**
+   * Report whether this phone still blocks the app being uninstalled.
+   *
+   * The app cannot stop a determined driver removing it — device admin
+   * rights are revocable from Android's settings. What it can do is make the
+   * attempt visible, since revoking those rights is the step immediately
+   * before an uninstall.
+   */
+  useEffect(() => {
+    if (!session) return
+    let cancelled = false
+
+    async function report() {
+      const status = await getDeviceProtection()
+      if (!status || cancelled) return
+      try {
+        const res = await driverFetch("/api/driver/device-status", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(status),
+        })
+        // Only clear the local revocation marker once the server has it,
+        // otherwise a failed report would lose the one event worth keeping.
+        if (res.ok && status.adminDisabledAt > 0) {
+          const data = (await res.json()) as { acknowledgedRevocation?: boolean }
+          if (data.acknowledgedRevocation) await clearDeviceAdminFlag()
+        }
+      } catch { /* retried on the next tick */ }
+    }
+
+    void report()
+    const id = window.setInterval(() => { void report() }, DEVICE_STATUS_MS)
+    return () => { cancelled = true; window.clearInterval(id) }
+  }, [session])
+
   useEffect(() => {
     if (!session) return
     void flushTrail()

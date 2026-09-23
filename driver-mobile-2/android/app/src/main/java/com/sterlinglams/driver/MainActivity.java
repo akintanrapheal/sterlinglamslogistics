@@ -1,8 +1,22 @@
 package com.sterlinglams.driver;
 
+import android.os.Bundle;
+
 import com.getcapacitor.BridgeActivity;
 
 public class MainActivity extends BridgeActivity {
+
+	/**
+	 * Register the device-admin bridge before the WebView loads, so the app
+	 * can report its own protection state on first render rather than after
+	 * a round trip.
+	 */
+	@Override
+	public void onCreate(Bundle savedInstanceState) {
+		registerPlugin(DeviceAdminPlugin.class);
+		super.onCreate(savedInstanceState);
+	}
+
 	@Override
 	public void onBackPressed() {
 		if (getBridge() != null && getBridge().getWebView() != null && getBridge().getWebView().canGoBack()) {

@@ -47,6 +47,17 @@ interface CapacitorGlobal {
       removeWatcher: (opts: { id: string }) => Promise<void>
       openSettings: () => Promise<void>
     }
+    DeviceAdmin?: {
+      status: () => Promise<{
+        isAdmin: boolean
+        deviceOwner: boolean
+        uninstallBlocked: boolean
+        adminDisabledAt: number
+      }>
+      requestAdmin: () => Promise<{ alreadyActive: boolean }>
+      clearDisabledFlag: () => Promise<void>
+      openSecuritySettings: () => Promise<void>
+    }
     App?: {
       addListener: (
         event: string,
@@ -221,6 +232,62 @@ export async function startBackgroundLocation(
 /** Open the app's system settings, where "Allow all the time" is granted. */
 export async function openLocationSettings(): Promise<void> {
   try { await getCapacitor()?.Plugins?.BackgroundGeolocation?.openSettings() } catch { /* ignore */ }
+}
+
+export interface DeviceProtectionStatus {
+  /** Holds device-admin rights, so Android refuses to uninstall the app. */
+  isAdmin: boolean
+  /** Fully managed device — the only state where removal is truly blocked. */
+  deviceOwner: boolean
+  /** Either of the above: uninstall cannot be completed as things stand. */
+  uninstallBlocked: boolean
+  /**
+   * When admin rights were last revoked, epoch ms, or 0.
+   *
+   * Recorded on the device because revocation is exactly the moment someone
+   * is about to remove the app, and there may be no network at the time.
+   * Reported on the next successful sync instead of being lost.
+   */
+  adminDisabledAt: number
+}
+
+/**
+ * Whether this device is protected against the app being uninstalled.
+ *
+ * Returns null outside the APK, where the question is meaningless.
+ */
+export async function getDeviceProtection(): Promise<DeviceProtectionStatus | null> {
+  const plugin = getCapacitor()?.Plugins?.DeviceAdmin
+  if (!plugin) return null
+  try {
+    return await plugin.status()
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Ask the driver to grant device-admin rights.
+ *
+ * Android owns the confirmation screen and it cannot be bypassed, so this
+ * only opens it; the driver still has to agree. Resolves as soon as the
+ * screen is shown, not when they decide — poll getDeviceProtection to learn
+ * the outcome.
+ */
+export async function requestDeviceAdmin(): Promise<boolean> {
+  const plugin = getCapacitor()?.Plugins?.DeviceAdmin
+  if (!plugin) return false
+  try {
+    const r = await plugin.requestAdmin()
+    return Boolean(r?.alreadyActive)
+  } catch {
+    return false
+  }
+}
+
+/** Clear the stored revocation marker once the office has been told. */
+export async function clearDeviceAdminFlag(): Promise<void> {
+  try { await getCapacitor()?.Plugins?.DeviceAdmin?.clearDisabledFlag() } catch { /* ignore */ }
 }
 
 /** True when running inside a Capacitor WebView (driver-mobile APK). */

@@ -33,6 +33,30 @@
                 android:name="android.support.FILE_PROVIDER_PATHS"
                 android:resource="@xml/file_paths"></meta-data>
         </provider>
+
+        <!--
+          Device administrator. While these rights are active Android refuses
+          to uninstall the app, which is what protects a company-owned phone
+          from casual removal.
+
+          The rights can still be revoked from Settings, so this raises the
+          bar rather than sealing the device — full enforcement needs the
+          phone enrolled as fully managed (docs/device-management.md). The
+          receiver reports revocation, so an attempt is at least visible.
+        -->
+        <receiver
+            android:name=".DriverDeviceAdminReceiver"
+            android:permission="android.permission.BIND_DEVICE_ADMIN"
+            android:exported="true">
+            <meta-data
+                android:name="android.app.device_admin"
+                android:resource="@xml/device_admin" />
+            <intent-filter>
+                <action android:name="android.app.action.DEVICE_ADMIN_ENABLED" />
+                <action android:name="android.app.action.DEVICE_ADMIN_DISABLED" />
+                <action android:name="android.app.action.DEVICE_ADMIN_DISABLE_REQUESTED" />
+            </intent-filter>
+        </receiver>
     </application>
 
     <!-- Permissions -->
