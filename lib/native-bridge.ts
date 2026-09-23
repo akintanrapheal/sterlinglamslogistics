@@ -40,7 +40,7 @@ interface CapacitorGlobal {
           distanceFilter?: number
         },
         cb: (
-          position?: { latitude: number; longitude: number; accuracy?: number },
+          position?: { latitude: number; longitude: number; accuracy?: number; speed?: number },
           error?: { code?: string; message?: string },
         ) => void,
       ) => Promise<string>
@@ -156,6 +156,8 @@ export interface BackgroundLocationFix {
   latitude: number
   longitude: number
   accuracy?: number
+  /** Metres per second, when the device reports it. */
+  speed?: number
 }
 
 /**
@@ -184,8 +186,12 @@ export async function startBackgroundLocation(
   try {
     const id = await plugin.addWatcher(
       {
-        backgroundTitle: "Sharing your location",
-        backgroundMessage: "Dispatch can see your position while you are online.",
+        backgroundTitle: "Vehicle location is being recorded",
+        // Wording matters: tracking now runs whenever the driver is signed
+        // in, not only during a shift, so a notification promising "while you
+        // are online" would misdescribe it. Signing out is what stops it, and
+        // this says so.
+        backgroundMessage: "Recorded while you are signed in. Sign out to stop.",
         requestPermissions: true,
         // Deliver the last known fix immediately rather than waiting for the
         // first new one, so the map isn't blank right after going online.

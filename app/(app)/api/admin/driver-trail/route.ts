@@ -2,6 +2,7 @@ import { NextResponse } from "next/server"
 import { verifyAdmin } from "@/lib/server/auth"
 import { checkAdminApiRateLimit } from "@/lib/rate-limit"
 import { readTrail, lagosDateKey, type TrailPoint } from "@/lib/server/driver-trail"
+import { snapTrailToRoads } from "@/lib/server/snap-to-roads"
 import { createLogger } from "@/lib/logger"
 
 const log = createLogger("api:admin:driver-trail")
@@ -20,6 +21,15 @@ const STOP_RADIUS_M = 60
 
 /** Time in one place before it counts as a stop rather than a pause at lights. */
 const STOP_MIN_MS = 3 * 60_000
+
+/**
+ * Speeds above this are treated as GPS error rather than travel.
+ *
+ * A reported 196 km/h through Lagos traffic is a fix that jumped, not a
+ * driver. 33 m/s is about 120 km/h — above anything these routes can produce,
+ * while still leaving expressway speeds intact.
+ */
+const MAX_PLAUSIBLE_SPEED_MS = 33
 
 /**
  * Jumps larger than this between consecutive fixes are excluded from distance.
@@ -137,11 +147,20 @@ export async function GET(req: Request) {
       // Prefer the device's own speed; derive it only when absent, since a
       // derived figure is distorted by the gap between fixes.
       const s = typeof cur.s === "number" ? cur.s : dt > 0 && d <= MAX_PLAUSIBLE_JUMP_M ? d / (dt / 1000) : 0
-      if (s > 0 && s < 60) {
+      // A derived speed is only as good as the gap it was measured over, so
+      // implausible values are discarded rather than reported as a maximum.
+      if (s > 0 && s <= MAX_PLAUSIBLE_SPEED_MS) {
         speeds.push(s)
         if (s > maxSpeed) maxSpeed = s
       }
     }
+
+    // Snap to the road network unless explicitly asked not to. Raw fixes drift
+    // and are sampled, so drawn directly they cut across blocks and round off
+    // corners. Falls back to raw points when snapping is unavailable — an
+    // approximate route beats an empty map.
+    const wantSnap = searchParams.get("snap") !== "0"
+    const snapped = wantSnap ? await snapTrailToRoads(points) : null
 
     const stops = detectStops(points)
     const stoppedMs = stops.reduce((sum, s) => sum + s.durationMs, 0)
@@ -153,6 +172,12 @@ export async function GET(req: Request) {
       driverId,
       date,
       points,
+      // The drawn line, which may be the road-matched version. Stops and the
+      // summary stay on raw points: snapping moves a fix onto the nearest
+      // road, which would nudge a stop away from where the driver actually
+      // waited and slightly alter measured distance.
+      path: snapped ?? points.map((p) => ({ lat: p.lat, lng: p.lng })),
+      snapped: Boolean(snapped),
       stops,
       summary: {
         distanceKm: Number((distanceM / 1000).toFixed(2)),
