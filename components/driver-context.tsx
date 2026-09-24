@@ -9,7 +9,8 @@ import { driverFetch, clearDriverToken } from "@/lib/driver-client"
 import { getPendingDeliveries, removePendingDelivery, pendingDeliveryCount as getPendingCount } from "@/lib/delivery-queue"
 import { getPendingStatusUpdates, removeStatusUpdate, pendingStatusCount } from "@/lib/status-queue"
 import { loadCachedOrders, saveCachedOrders, clearCachedOrders } from "@/lib/order-cache"
-import { onAppResume, startBackgroundLocation } from "@/lib/native-bridge"
+import { onAppResume, startBackgroundLocation, getDeviceProtection, clearDeviceAdminFlag } from "@/lib/native-bridge"
+import { enqueueTrailPoint, flushTrailQueue, queuedTrailCount } from "@/lib/trail-queue"
 
 interface DriverSession {
   id: string
@@ -60,6 +61,16 @@ interface DriverContextValue {
   /** Force a flush of the offline queues (the banner's "Retry now"). */
   syncPending: () => Promise<void>
   /**
+   * Location points recorded but not yet uploaded.
+   *
+   * Exposed because the trail pipeline previously failed silently: points
+   * could be captured and never sent, and the only symptom was an empty map
+   * in the office hours later. A number on the driver's screen separates
+   * "nothing is being recorded" from "recorded but not reaching the server",
+   * which are different problems.
+   */
+  trailQueued: number
+  /**
    * Whether the native foreground service is reporting location.
    *
    * False on the web, and false in the APK when the driver hasn't granted
@@ -88,18 +99,34 @@ const ORDER_POLL_MS = 45_000
 /**
  * Trail recording thresholds.
  *
- * Live pings are far more frequent than a history needs — every few seconds
- * in the foreground — so the device decides which fixes are worth keeping.
- * Doing it here costs nothing; doing it on the server would mean reading the
- * previous point on every ping just to discard most of them.
+ * Live pings are far more frequent than a history needs, so the device
+ * decides which fixes are worth keeping. Doing it here costs nothing; doing
+ * it on the server would mean reading the previous point on every ping just
+ * to discard most of them.
  *
- * 40m or 90s keeps a recognisable route through city driving while bounding
- * an eight-hour shift to a few hundred points rather than several thousand.
- * A stationary driver contributes one point every 90s, which is what makes
- * stop detection possible without recording every idle second.
+ * These started at 40m/90s, which produced a route that cut straight across
+ * blocks: two points 200m apart on a curving road are drawn as a straight
+ * line, so corners disappeared entirely. 12m is roughly the width of a
+ * junction, which is the resolution needed for a turn to register as a turn.
+ *
+ * The time threshold stays long because it exists for a different reason —
+ * a stationary driver still needs an occasional point so stop detection has
+ * something to measure. It is not a sampling rate for movement.
  */
-const TRAIL_MIN_METRES = 40
-const TRAIL_MIN_MS = 90_000
+const TRAIL_MIN_METRES = 12
+const TRAIL_MIN_MS = 60_000
+
+/** How often buffered history is uploaded while a connection is available. */
+const TRAIL_FLUSH_MS = 2 * 60_000
+
+/**
+ * How often the phone reports whether it is still protected from uninstall.
+ *
+ * Infrequent on purpose — this changes rarely, and the one moment that
+ * matters (rights being revoked) is captured on the device and carried on the
+ * next report regardless of when that lands.
+ */
+const DEVICE_STATUS_MS = 15 * 60_000
 
 /** Metres between two coordinates (haversine). */
 function metresBetween(a: { lat: number; lng: number }, b: { lat: number; lng: number }): number {
@@ -192,6 +219,7 @@ export function DriverProvider({ children }: { children: ReactNode }) {
   // applied without asking the server what it already has.
   const lastTrailRef = useRef<{ lat: number; lng: number; at: number } | null>(null)
   const [backgroundTracking, setBackgroundTracking] = useState(false)
+  const [trailQueued, setTrailQueued] = useState(0)
 
   // Load session from localStorage
   useEffect(() => {
@@ -272,7 +300,17 @@ export function DriverProvider({ children }: { children: ReactNode }) {
    * this is a no-op and the foreground watcher takes over unchanged.
    */
   useEffect(() => {
-    if (!session || !isOnline) return
+    // Deliberately keyed on session alone, not on isOnline.
+    //
+    // Drivers take company vehicles home, so tracking that stopped when a
+    // shift ended left exactly the journeys the vehicle log exists for
+    // unrecorded. Tracking now runs for as long as the driver is signed in,
+    // and signing out is what stops it.
+    //
+    // This is a real expansion of what is recorded about someone, so it is
+    // visible rather than silent: the foreground service notification below
+    // stays in the shade the entire time it is running.
+    if (!session) return
     const sessionId = session.id
     let stop: null | (() => void) = null
     let cancelled = false
@@ -282,6 +320,7 @@ export function DriverProvider({ children }: { children: ReactNode }) {
         const coords = { lat: fix.latitude, lng: fix.longitude }
         setLiveGps(coords)
         setGpsError(false)
+        shouldRecordTrail(coords, typeof fix.speed === "number" ? fix.speed : undefined)
         // Logged deliberately, not left over from debugging. The native
         // service can be running and producing fixes while the WebView's JS
         // is paused, in which case nothing reaches the server and the only
@@ -298,8 +337,6 @@ export function DriverProvider({ children }: { children: ReactNode }) {
             driverId: sessionId,
             lat: coords.lat,
             lng: coords.lng,
-            trail: shouldRecordTrail(coords),
-            ...(typeof fix.accuracy === "number" ? {} : {}),
           }),
         })
           .then((r) => console.log(`[bg-location] posted ${r.status}`))
@@ -335,11 +372,17 @@ export function DriverProvider({ children }: { children: ReactNode }) {
       backgroundTrackingRef.current = false
       setBackgroundTracking(false)
     }
-  }, [session, isOnline])
+    // isOnline is deliberately absent. Including it tore the foreground
+    // service down and rebuilt it on every shift toggle, losing fixes across
+    // the gap — which contradicted the comment above and undid the point of
+    // keying on the session.
+  }, [session])
 
-  // GPS tracking when online
+  // Foreground GPS, used when the native service isn't available.
   useEffect(() => {
-    if (!session || !isOnline) return
+    // Same reasoning as the background effect: tied to being signed in, not
+    // to being on shift.
+    if (!session) return
     // Skip when the foreground service is already reporting — see above.
     if (backgroundTrackingRef.current) return
     if (!navigator.geolocation) {
@@ -364,7 +407,6 @@ export function DriverProvider({ children }: { children: ReactNode }) {
               driverId: sessionId,
               lat: coords.lat,
               lng: coords.lng,
-              trail: shouldRecordTrail(coords),
             }),
           })
         } catch { /* silently ignore */ }
@@ -382,6 +424,7 @@ export function DriverProvider({ children }: { children: ReactNode }) {
         const coords = { lat: pos.coords.latitude, lng: pos.coords.longitude }
         setLiveGps(coords)
         setGpsError(false)
+        shouldRecordTrail(coords, pos.coords.speed ?? undefined)
 
         // Throttle writes — at most once every 5 seconds
         const now = Date.now()
@@ -395,10 +438,6 @@ export function DriverProvider({ children }: { children: ReactNode }) {
               driverId: sessionId,
               lat: coords.lat,
               lng: coords.lng,
-              trail: shouldRecordTrail(coords),
-              ...(typeof pos.coords.speed === "number" && pos.coords.speed >= 0
-                ? { speed: pos.coords.speed }
-                : {}),
             }),
           })
         } catch { /* best-effort */ }
@@ -579,15 +618,52 @@ export function DriverProvider({ children }: { children: ReactNode }) {
    * Whether this fix should be added to the driver's location history, and
    * remember it if so. Called for every live ping.
    */
-  const shouldRecordTrail = useCallback((coords: { lat: number; lng: number }) => {
-    const now = Date.now()
-    const last = lastTrailRef.current
-    if (last && now - last.at < TRAIL_MIN_MS && metresBetween(last, coords) < TRAIL_MIN_METRES) {
-      return false
-    }
-    lastTrailRef.current = { ...coords, at: now }
-    return true
-  }, [])
+  const shouldRecordTrail = useCallback(
+    (coords: { lat: number; lng: number }, speed?: number) => {
+      const now = Date.now()
+      const last = lastTrailRef.current
+      if (last && now - last.at < TRAIL_MIN_MS && metresBetween(last, coords) < TRAIL_MIN_METRES) {
+        return false
+      }
+      lastTrailRef.current = { ...coords, at: now }
+      // Buffered rather than posted here. A point sent inline is lost when
+      // there is no connection, which is precisely the journey nobody can
+      // reconstruct afterwards — the drive home, through patchy coverage.
+      enqueueTrailPoint({
+        lat: coords.lat,
+        lng: coords.lng,
+        t: now,
+        ...(typeof speed === "number" && speed >= 0 ? { s: speed } : {}),
+      })
+      setTrailQueued(queuedTrailCount())
+      return true
+    },
+    [],
+  )
+
+  /**
+   * Upload buffered history.
+   *
+   * Runs on a timer, on reconnect and on app resume. Failures are silent by
+   * design: history is secondary to the live position and to delivery writes,
+   * and a driver has nothing useful to do about a failed trail upload.
+   */
+  const flushTrail = useCallback(async () => {
+    if (!session || queuedTrailCount() === 0) return
+    await flushTrailQueue(async (batch) => {
+      try {
+        const res = await driverFetch("/api/driver/trail", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ points: batch }),
+        })
+        return res.ok
+      } catch {
+        return false
+      }
+    })
+    setTrailQueued(queuedTrailCount())
+  }, [session])
 
   const patchOrder = useCallback((orderId: string, changes: Partial<Order>) => {
     setOrders((prev) => {
@@ -735,6 +811,59 @@ export function DriverProvider({ children }: { children: ReactNode }) {
    * so without this the first thing a driver sees after unlocking the phone
    * is whatever was on screen when they pocketed it.
    */
+  // Upload buffered history: periodically, on reconnect, and on resume. A
+  // device returning from a dead zone can carry hours of points, so this is
+  // deliberately independent of the order poll, which only runs on shift.
+  /**
+   * Report whether this phone still blocks the app being uninstalled.
+   *
+   * The app cannot stop a determined driver removing it — device admin
+   * rights are revocable from Android's settings. What it can do is make the
+   * attempt visible, since revoking those rights is the step immediately
+   * before an uninstall.
+   */
+  useEffect(() => {
+    if (!session) return
+    let cancelled = false
+
+    async function report() {
+      const status = await getDeviceProtection()
+      if (!status || cancelled) return
+      try {
+        const res = await driverFetch("/api/driver/device-status", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(status),
+        })
+        // Only clear the local revocation marker once the server has it,
+        // otherwise a failed report would lose the one event worth keeping.
+        if (res.ok && status.adminDisabledAt > 0) {
+          const data = (await res.json()) as { acknowledgedRevocation?: boolean }
+          if (data.acknowledgedRevocation) await clearDeviceAdminFlag()
+        }
+      } catch { /* retried on the next tick */ }
+    }
+
+    void report()
+    const id = window.setInterval(() => { void report() }, DEVICE_STATUS_MS)
+    return () => { cancelled = true; window.clearInterval(id) }
+  }, [session])
+
+  useEffect(() => {
+    if (!session) return
+    void flushTrail()
+    const id = window.setInterval(() => { void flushTrail() }, TRAIL_FLUSH_MS)
+    const onOnline = () => { void flushTrail() }
+    window.addEventListener("online", onOnline)
+    let removeResume: (() => void) | null = null
+    void onAppResume(() => { void flushTrail() }).then((fn) => { removeResume = fn })
+    return () => {
+      window.clearInterval(id)
+      window.removeEventListener("online", onOnline)
+      removeResume?.()
+    }
+  }, [session, flushTrail])
+
   useEffect(() => {
     if (!session || !isOnline) return
 
@@ -871,8 +1000,9 @@ export function DriverProvider({ children }: { children: ReactNode }) {
     syncing,
     syncPending: async () => { await retryPendingRef.current?.() },
     backgroundTracking,
+    trailQueued,
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }), [session, driver, orders, isOnline, justWentOnline, loadingSession, loadingOrders, drawerOpen, refreshOrders, patchOrder, optimizeRoute, liveGps, gpsError, pendingDeliveryCount, isConnected, syncing, backgroundTracking])
+  }), [session, driver, orders, isOnline, justWentOnline, loadingSession, loadingOrders, drawerOpen, refreshOrders, patchOrder, optimizeRoute, liveGps, gpsError, pendingDeliveryCount, isConnected, syncing, backgroundTracking, trailQueued])
 
   return (
     <DriverContext.Provider value={contextValue}>

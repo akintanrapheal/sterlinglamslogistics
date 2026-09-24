@@ -105,6 +105,54 @@ export async function appendTrailPoint(
   }
 }
 
+/**
+ * Append many points at once, grouped into the days they belong to.
+ *
+ * A backlog uploaded after a device was offline can span midnight, so points
+ * are bucketed by their own timestamp rather than all filed under today —
+ * otherwise a night drive home would appear on the following morning.
+ *
+ * One transaction per day touched, rather than per point: a few hundred
+ * points would otherwise be a few hundred read-modify-write cycles on the
+ * same document, which is both slow and needlessly expensive.
+ */
+export async function appendTrailPoints(driverId: string, points: TrailPoint[]): Promise<void> {
+  if (points.length === 0) return
+
+  const byDay = new Map<string, TrailPoint[]>()
+  for (const p of points) {
+    const key = lagosDateKey(new Date(p.t))
+    const bucket = byDay.get(key)
+    if (bucket) bucket.push(p)
+    else byDay.set(key, [p])
+  }
+
+  for (const [date, dayPoints] of byDay) {
+    const ref = adminDb.collection(COLLECTION).doc(trailDocId(driverId, date))
+    try {
+      await adminDb.runTransaction(async (txn) => {
+        const snap = await txn.get(ref)
+        const existing = (snap.exists ? (snap.data()?.points as TrailPoint[]) : null) ?? []
+
+        // Drop points already stored. A client that uploads a batch, loses
+        // the connection before recording success, then retries would
+        // otherwise duplicate them and double the day's distance.
+        const seen = new Set(existing.map((e) => `${e.t}`))
+        const fresh = dayPoints.filter((p) => !seen.has(`${p.t}`))
+        if (fresh.length === 0) return
+
+        const merged = [...existing, ...fresh]
+          .sort((a, b) => a.t - b.t)
+          .slice(-MAX_POINTS_PER_DAY)
+
+        txn.set(ref, { driverId, date, points: merged, updatedAt: new Date() }, { merge: true })
+      })
+    } catch (err) {
+      log.warn({ err, driverId, date, count: dayPoints.length }, "Failed to append trail batch")
+    }
+  }
+}
+
 /** Read one driver's trail for one day. Returns [] when nothing was recorded. */
 export async function readTrail(driverId: string, date: string): Promise<TrailPoint[]> {
   try {

@@ -34,6 +34,13 @@ interface Stop {
   durationMs: number
 }
 
+interface DeviceState {
+  lastPingAt: number | null
+  lastReportedAt: number | null
+  supportsTrail: boolean
+  uninstallBlocked: boolean
+}
+
 interface Summary {
   distanceKm: number
   movingMs: number
@@ -73,6 +80,16 @@ export default function TrackingPage() {
   const [points, setPoints] = useState<TrailPoint[]>([])
   const [stops, setStops] = useState<Stop[]>([])
   const [summary, setSummary] = useState<Summary | null>(null)
+  const [device, setDevice] = useState<DeviceState | null>(null)
+  /**
+   * The line to draw, which is the road-matched path when snapping succeeded.
+   *
+   * Separate from `points`: markers, stops and timings come from the raw
+   * fixes, because snapping moves a point onto the nearest road and would
+   * shift a stop away from where the driver actually waited.
+   */
+  const [path, setPath] = useState<google.maps.LatLngLiteral[]>([])
+  const [snapped, setSnapped] = useState(false)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [mapError, setMapError] = useState<string | null>(null)
@@ -150,11 +167,17 @@ export default function TrackingPage() {
       setPoints(json.points ?? [])
       setStops(json.stops ?? [])
       setSummary(json.summary ?? null)
+      setDevice(json.device ?? null)
+      setPath(json.path ?? (json.points ?? []).map((p: TrailPoint) => ({ lat: p.lat, lng: p.lng })))
+      setSnapped(Boolean(json.snapped))
     } catch (e) {
       setError(e instanceof Error ? e.message : "Could not load this driver's history")
       setPoints([])
       setStops([])
       setSummary(null)
+      setDevice(null)
+      setPath([])
+      setSnapped(false)
     } finally {
       setLoading(false)
     }
@@ -171,9 +194,7 @@ export default function TrackingPage() {
 
     for (const o of overlaysRef.current) o.setMap(null)
     overlaysRef.current = []
-    if (points.length === 0) return
-
-    const path = points.map((p) => ({ lat: p.lat, lng: p.lng }))
+    if (points.length === 0 || path.length === 0) return
 
     const line = new google.maps.Polyline({
       map,
@@ -209,9 +230,13 @@ export default function TrackingPage() {
         },
       })
 
+    // Anchored on raw fixes, not the snapped line: start and end should sit
+    // where the driver actually was.
+    const first = { lat: points[0].lat, lng: points[0].lng }
+    const last = { lat: points[points.length - 1].lat, lng: points[points.length - 1].lng }
     overlaysRef.current.push(
-      dot(path[0], "#16a34a", "A", `Start — ${formatTime(points[0].t)}`),
-      dot(path[path.length - 1], "#dc2626", "B", `Last seen — ${formatTime(points[points.length - 1].t)}`),
+      dot(first, "#16a34a", "A", `Start — ${formatTime(points[0].t)}`),
+      dot(last, "#dc2626", "B", `Last seen — ${formatTime(points[points.length - 1].t)}`),
     )
 
     stops.forEach((s, i) => {
@@ -228,7 +253,7 @@ export default function TrackingPage() {
     const bounds = new google.maps.LatLngBounds()
     for (const p of path) bounds.extend(p)
     map.fitBounds(bounds, 48)
-  }, [mapReady, points, stops])
+  }, [mapReady, points, stops, path])
 
   const zoomTo = useCallback((lat: number, lng: number) => {
     mapRef.current?.panTo({ lat, lng })
@@ -342,6 +367,15 @@ export default function TrackingPage() {
               <p className="mt-0.5 text-xs text-muted-foreground">
                 Tracked {formatTime(summary.firstSeen)} – {formatTime(summary.lastSeen)} ·{" "}
                 {summary.pointCount} points
+                {snapped ? " · matched to roads" : " · raw GPS"}
+              </p>
+            )}
+            {device?.supportsTrail && !device.uninstallBlocked && (
+              // Surfaced here because this is the page where someone is
+              // already asking questions about a specific driver's phone.
+              <p className="mt-1.5 flex items-start gap-1 text-[11px] text-amber-600">
+                <AlertTriangle className="mt-px size-3 shrink-0" />
+                App can be uninstalled on this phone — device protection is not active.
               </p>
             )}
           </div>
@@ -393,12 +427,49 @@ export default function TrackingPage() {
           {!mapError && !loading && points.length === 0 && (
             <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center p-6">
               <div className="pointer-events-auto max-w-sm rounded-xl border border-border bg-background/95 p-4 text-center shadow-lg">
-                <MapPin className="mx-auto mb-2 size-6 text-muted-foreground" />
-                <p className="text-sm font-semibold">No history for this day</p>
-                <p className="mt-1 text-xs text-muted-foreground">
-                  Location history is only recorded while a driver is online. Nothing was
-                  stored before this feature was added, so earlier dates will be empty.
-                </p>
+                {/* An empty day has two very different causes and they need
+                    opposite responses: ask the driver, or install the app.
+                    Saying only "no movement" points at the wrong one. */}
+                {device && !device.supportsTrail ? (
+                  <>
+                    <AlertTriangle className="mx-auto mb-2 size-6 text-amber-600" />
+                    <p className="text-sm font-semibold">This phone isn&apos;t recording history</p>
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      It has never reported location-history support, so it is running an
+                      older version of the driver app. Install the current build on this
+                      driver&apos;s phone and their trails will start recording.
+                    </p>
+                    {device.lastPingAt && (
+                      <p className="mt-2 text-[11px] text-muted-foreground">
+                        The app is otherwise working — last seen{" "}
+                        {new Date(device.lastPingAt).toLocaleString("en-NG", {
+                          dateStyle: "medium",
+                          timeStyle: "short",
+                        })}
+                        .
+                      </p>
+                    )}
+                  </>
+                ) : (
+                  <>
+                    <MapPin className="mx-auto mb-2 size-6 text-muted-foreground" />
+                    <p className="text-sm font-semibold">No movement recorded</p>
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      This phone records history, but nothing was stored for this date —
+                      the driver was signed out, or the app was not installed yet.
+                    </p>
+                    {device?.lastReportedAt && (
+                      <p className="mt-2 text-[11px] text-muted-foreground">
+                        Last reported{" "}
+                        {new Date(device.lastReportedAt).toLocaleString("en-NG", {
+                          dateStyle: "medium",
+                          timeStyle: "short",
+                        })}
+                        .
+                      </p>
+                    )}
+                  </>
+                )}
               </div>
             </div>
           )}

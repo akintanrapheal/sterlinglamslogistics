@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Device administrator policy for the driver app.
+
+  Declaring a device admin is what prevents casual uninstallation: Android
+  refuses to remove an app while it holds active admin rights, so a driver
+  cannot simply long-press the icon and delete it.
+
+  It is a speed bump rather than a lock. The rights can be revoked from
+  Settings > Security > Device admin apps, and uninstall then proceeds
+  normally. Genuine enforcement needs the device enrolled as fully managed
+  (see docs/device-management.md); this raises the bar and, more usefully,
+  makes removal a deliberate act that the server can notice.
+
+  The policies requested are deliberately minimal — only what is needed to
+  hold admin status. Nothing here locks, wipes or restricts the phone, so
+  activating it cannot brick a driver's device.
+-->
+<device-admin>
+    <uses-policies>
+        <force-lock />
+    </uses-policies>
+</device-admin>
