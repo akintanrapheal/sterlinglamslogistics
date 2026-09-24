@@ -3,6 +3,7 @@ import { verifyAdmin } from "@/lib/server/auth"
 import { checkAdminApiRateLimit } from "@/lib/rate-limit"
 import { readTrail, lagosDateKey, type TrailPoint } from "@/lib/server/driver-trail"
 import { snapTrailToRoads } from "@/lib/server/snap-to-roads"
+import { adminDb } from "@/lib/server/firebase-admin"
 import { createLogger } from "@/lib/logger"
 
 const log = createLogger("api:admin:driver-trail")
@@ -113,7 +114,41 @@ export async function GET(req: Request) {
   }
 
   try {
-    const points = await readTrail(driverId, date)
+    const [points, driverSnap] = await Promise.all([
+      readTrail(driverId, date),
+      adminDb.collection("drivers").doc(driverId).get(),
+    ])
+
+    /**
+     * Why a day might be empty.
+     *
+     * "No movement recorded" reads as though the driver didn't move, when the
+     * far more common cause is a phone running a build that predates trail
+     * recording. Those need opposite responses — one is a question for the
+     * driver, the other is an app to install — so the page should not have to
+     * guess between them.
+     *
+     * deviceProtectionAt is the marker: only builds that record trails report
+     * it at all, so its absence identifies an old app without needing a
+     * version number the older build never sent.
+     */
+    const d = driverSnap.exists ? driverSnap.data() ?? {} : {}
+    const toMs = (v: unknown): number | null => {
+      if (!v || typeof v !== "object") return null
+      const t = v as { _seconds?: number; seconds?: number }
+      const secs = t._seconds ?? t.seconds
+      return typeof secs === "number" ? secs * 1000 : null
+    }
+    const device = {
+      lastPingAt: toMs(d.lastPingAt),
+      lastReportedAt: toMs(d.deviceProtectionAt),
+      // No report ever received means the phone is not running a build that
+      // records history.
+      supportsTrail: Boolean(d.deviceProtectionAt),
+      uninstallBlocked: Boolean(
+        (d.deviceProtection as { uninstallBlocked?: boolean } | undefined)?.uninstallBlocked,
+      ),
+    }
 
     if (points.length === 0) {
       return NextResponse.json({
@@ -123,6 +158,7 @@ export async function GET(req: Request) {
         points: [],
         stops: [],
         summary: null,
+        device,
       })
     }
 
@@ -179,6 +215,7 @@ export async function GET(req: Request) {
       path: snapped ?? points.map((p) => ({ lat: p.lat, lng: p.lng })),
       snapped: Boolean(snapped),
       stops,
+      device,
       summary: {
         distanceKm: Number((distanceM / 1000).toFixed(2)),
         movingMs,
