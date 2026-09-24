@@ -372,7 +372,11 @@ export function DriverProvider({ children }: { children: ReactNode }) {
       backgroundTrackingRef.current = false
       setBackgroundTracking(false)
     }
-  }, [session, isOnline])
+    // isOnline is deliberately absent. Including it tore the foreground
+    // service down and rebuilt it on every shift toggle, losing fixes across
+    // the gap — which contradicted the comment above and undid the point of
+    // keying on the session.
+  }, [session])
 
   // Foreground GPS, used when the native service isn't available.
   useEffect(() => {
