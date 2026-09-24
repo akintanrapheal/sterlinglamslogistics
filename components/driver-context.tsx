@@ -61,6 +61,16 @@ interface DriverContextValue {
   /** Force a flush of the offline queues (the banner's "Retry now"). */
   syncPending: () => Promise<void>
   /**
+   * Location points recorded but not yet uploaded.
+   *
+   * Exposed because the trail pipeline previously failed silently: points
+   * could be captured and never sent, and the only symptom was an empty map
+   * in the office hours later. A number on the driver's screen separates
+   * "nothing is being recorded" from "recorded but not reaching the server",
+   * which are different problems.
+   */
+  trailQueued: number
+  /**
    * Whether the native foreground service is reporting location.
    *
    * False on the web, and false in the APK when the driver hasn't granted
@@ -209,6 +219,7 @@ export function DriverProvider({ children }: { children: ReactNode }) {
   // applied without asking the server what it already has.
   const lastTrailRef = useRef<{ lat: number; lng: number; at: number } | null>(null)
   const [backgroundTracking, setBackgroundTracking] = useState(false)
+  const [trailQueued, setTrailQueued] = useState(0)
 
   // Load session from localStorage
   useEffect(() => {
@@ -620,6 +631,7 @@ export function DriverProvider({ children }: { children: ReactNode }) {
         t: now,
         ...(typeof speed === "number" && speed >= 0 ? { s: speed } : {}),
       })
+      setTrailQueued(queuedTrailCount())
       return true
     },
     [],
@@ -646,6 +658,7 @@ export function DriverProvider({ children }: { children: ReactNode }) {
         return false
       }
     })
+    setTrailQueued(queuedTrailCount())
   }, [session])
 
   const patchOrder = useCallback((orderId: string, changes: Partial<Order>) => {
@@ -983,8 +996,9 @@ export function DriverProvider({ children }: { children: ReactNode }) {
     syncing,
     syncPending: async () => { await retryPendingRef.current?.() },
     backgroundTracking,
+    trailQueued,
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }), [session, driver, orders, isOnline, justWentOnline, loadingSession, loadingOrders, drawerOpen, refreshOrders, patchOrder, optimizeRoute, liveGps, gpsError, pendingDeliveryCount, isConnected, syncing, backgroundTracking])
+  }), [session, driver, orders, isOnline, justWentOnline, loadingSession, loadingOrders, drawerOpen, refreshOrders, patchOrder, optimizeRoute, liveGps, gpsError, pendingDeliveryCount, isConnected, syncing, backgroundTracking, trailQueued])
 
   return (
     <DriverContext.Provider value={contextValue}>

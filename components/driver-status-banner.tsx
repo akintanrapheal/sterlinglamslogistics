@@ -16,7 +16,7 @@ import { CloudOff, Loader2, MapPinOff, RefreshCw, Settings, WifiOff } from "luci
  * space on a phone screen unless there is something to say.
  */
 export function DriverStatusBanner() {
-  const { isConnected, syncing, pendingDeliveryCount, gpsError, syncPending, session, isOnline, backgroundTracking } = useDriver()
+  const { isConnected, syncing, pendingDeliveryCount, gpsError, syncPending, session, isOnline, backgroundTracking, trailQueued } = useDriver()
 
   // Nothing to report, or nobody logged in to report it to.
   if (!session) return null
@@ -25,7 +25,11 @@ export function DriverStatusBanner() {
   // Only meaningful inside the APK: on the web there is no foreground service
   // to be missing, so this would be a permanent false alarm.
   const showBackgroundOff = isOnline && isNativeApp() && !backgroundTracking
-  if (!showOffline && !showPending && !gpsError && !showBackgroundOff) return null
+  // A backlog is normal for a few minutes; a large one means uploads are
+  // failing, which previously produced no symptom at all on this end — the
+  // office just saw an empty map hours later.
+  const showTrailBacklog = trailQueued >= 50
+  if (!showOffline && !showPending && !gpsError && !showBackgroundOff && !showTrailBacklog) return null
 
   async function onRetry() {
     void hapticTap()
@@ -89,6 +93,14 @@ export function DriverStatusBanner() {
             <Settings className="h-3.5 w-3.5" />
             Fix
           </button>
+        </Banner>
+      )}
+
+      {showTrailBacklog && (
+        <Banner tone="warning" icon={<MapPinOff className="h-4 w-4 shrink-0" />}>
+          <span className="flex-1">
+            {trailQueued} location points saved on this phone, waiting to upload.
+          </span>
         </Banner>
       )}
 
