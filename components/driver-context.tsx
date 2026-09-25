@@ -120,6 +120,25 @@ const TRAIL_MIN_MS = 60_000
 const TRAIL_FLUSH_MS = 2 * 60_000
 
 /**
+ * How often the last known position is re-sent when no new fix has arrived.
+ *
+ * Position used to be reported only when the GPS produced a fix. In the
+ * foreground that hid the problem: watchPosition fires every few seconds, so
+ * something was always being sent. In the background only the native service
+ * runs, and it reports on *movement* (distanceFilter, 25 m) — so a rider
+ * parked at a customer, sat in traffic, or walking sent nothing at all, aged
+ * past the dispatch map's two-minute stale window, and greyed out as though
+ * the phone had died.
+ *
+ * "Not moving" and "not reachable" are different things and dispatch needs to
+ * tell them apart. This re-sends the last fix so a stationary rider stays
+ * visible, and genuine loss of contact still shows as loss of contact.
+ *
+ * Half the stale window, so one missed beat is not enough to grey a rider out.
+ */
+const POSITION_HEARTBEAT_MS = 60_000
+
+/**
  * How often the phone reports whether it is still protected from uninstall.
  *
  * Infrequent on purpose — this changes rarely, and the one moment that
@@ -218,6 +237,10 @@ export function DriverProvider({ children }: { children: ReactNode }) {
   // Last fix actually written to history, so the thresholds above can be
   // applied without asking the server what it already has.
   const lastTrailRef = useRef<{ lat: number; lng: number; at: number } | null>(null)
+  // Last fix seen from any source, so the heartbeat has something to re-send
+  // while the GPS is quiet. A ref rather than state: the heartbeat runs on an
+  // interval and must not depend on a re-render to see the newest value.
+  const lastFixRef = useRef<{ lat: number; lng: number; speed?: number } | null>(null)
   const [backgroundTracking, setBackgroundTracking] = useState(false)
   const [trailQueued, setTrailQueued] = useState(0)
 
@@ -320,6 +343,14 @@ export function DriverProvider({ children }: { children: ReactNode }) {
         const coords = { lat: fix.latitude, lng: fix.longitude }
         setLiveGps(coords)
         setGpsError(false)
+        lastFixRef.current = {
+          ...coords,
+          ...(typeof fix.speed === "number" ? { speed: fix.speed } : {}),
+        }
+        // Stamped here as well as in the foreground watcher: the heartbeat
+        // skips a beat whenever a real position was sent recently, and without
+        // this it would treat every background fix as silence and post twice.
+        lastGpsWriteRef.current = Date.now()
         shouldRecordTrail(coords, typeof fix.speed === "number" ? fix.speed : undefined)
         // Logged deliberately, not left over from debugging. The native
         // service can be running and producing fixes while the WebView's JS
@@ -424,6 +455,12 @@ export function DriverProvider({ children }: { children: ReactNode }) {
         const coords = { lat: pos.coords.latitude, lng: pos.coords.longitude }
         setLiveGps(coords)
         setGpsError(false)
+        lastFixRef.current = {
+          ...coords,
+          ...(typeof pos.coords.speed === "number" && pos.coords.speed >= 0
+            ? { speed: pos.coords.speed }
+            : {}),
+        }
         shouldRecordTrail(coords, pos.coords.speed ?? undefined)
 
         // Throttle writes — at most once every 5 seconds
@@ -664,6 +701,47 @@ export function DriverProvider({ children }: { children: ReactNode }) {
     })
     setTrailQueued(queuedTrailCount())
   }, [session])
+
+  /**
+   * Keep dispatch's view of this rider alive when the GPS is quiet.
+   *
+   * Deliberately not tied to isOnline or to the app being foregrounded: the
+   * whole point is to cover the case where the rider has left the app, which
+   * is when the only other source of position updates (movement past the
+   * native service's distance filter) can go silent for long stretches.
+   *
+   * Sends nothing when a real position was posted within the interval, so this
+   * adds no writes while a rider is actually moving.
+   */
+  const sendPositionHeartbeat = useCallback(async () => {
+    if (!session) return
+    const fix = lastFixRef.current
+    if (!fix) return
+    if (Date.now() - lastGpsWriteRef.current < POSITION_HEARTBEAT_MS) return
+
+    lastGpsWriteRef.current = Date.now()
+    try {
+      await driverFetch("/api/driver/location", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ driverId: session.id, lat: fix.lat, lng: fix.lng }),
+      })
+    } catch {
+      // Best-effort. The next beat retries, and a rider genuinely out of
+      // contact *should* age out on the dispatch map rather than be faked
+      // into looking live.
+    }
+  }, [session])
+
+  useEffect(() => {
+    if (!session) return
+    // Checked at half the beat interval so a beat is never skipped by the
+    // drift between this timer and the last real position write.
+    const id = window.setInterval(() => {
+      void sendPositionHeartbeat()
+    }, POSITION_HEARTBEAT_MS / 2)
+    return () => window.clearInterval(id)
+  }, [session, sendPositionHeartbeat])
 
   const patchOrder = useCallback((orderId: string, changes: Partial<Order>) => {
     setOrders((prev) => {
