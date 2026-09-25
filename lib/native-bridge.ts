@@ -163,6 +163,45 @@ export async function onAppResume(handler: () => void): Promise<() => void> {
   }
 }
 
+/**
+ * Hand location reporting to the native service.
+ *
+ * Returns true when the service took over, false in a browser or an APK built
+ * without the plugin — in which case the caller keeps its own WebView-based
+ * reporting, which is worse but not nothing.
+ *
+ * The token is passed once here rather than read by the service, because the
+ * session lives in the WebView's storage and Java has no access to it.
+ */
+export async function startNativeTracker(opts: {
+  apiBase: string
+  token: string | null
+  driverId: string
+}): Promise<boolean> {
+  const plugin = (getCapacitor()?.Plugins as Record<string, unknown> | undefined)?.NativeTracker as
+    | { start?: (o: Record<string, unknown>) => Promise<unknown>; stop?: () => Promise<unknown> }
+    | undefined
+  if (!plugin?.start) return false
+  try {
+    await plugin.start({ apiBase: opts.apiBase, token: opts.token, driverId: opts.driverId })
+    return true
+  } catch {
+    return false
+  }
+}
+
+/** Stop the native service. Called on sign-out — the documented off switch. */
+export async function stopNativeTracker(): Promise<void> {
+  const plugin = (getCapacitor()?.Plugins as Record<string, unknown> | undefined)?.NativeTracker as
+    | { stop?: () => Promise<unknown> }
+    | undefined
+  try {
+    await plugin?.stop?.()
+  } catch {
+    /* ignore */
+  }
+}
+
 export interface BackgroundLocationFix {
   latitude: number
   longitude: number
@@ -206,7 +245,12 @@ export async function startBackgroundLocation(
         requestPermissions: true,
         // Deliver the last known fix immediately rather than waiting for the
         // first new one, so the map isn't blank right after going online.
-        stale: false,
+        //
+        // This said `false`, which is the opposite: the plugin then emits only
+        // freshly acquired positions. Combined with distanceFilter below, a
+        // stationary phone reported nothing at all after launch — no first fix
+        // ever arrived, so anything waiting on one waited forever.
+        stale: true,
         // Metres of movement before a new fix is reported. Sitting in traffic
         // shouldn't drain the battery or spend Firestore writes.
         distanceFilter: 25,

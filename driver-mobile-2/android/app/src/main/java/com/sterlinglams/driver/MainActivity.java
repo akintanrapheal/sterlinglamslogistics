@@ -14,6 +14,7 @@ public class MainActivity extends BridgeActivity {
 	@Override
 	public void onCreate(Bundle savedInstanceState) {
 		registerPlugin(DeviceAdminPlugin.class);
+		registerPlugin(NativeTrackerPlugin.class);
 		super.onCreate(savedInstanceState);
 	}
 
