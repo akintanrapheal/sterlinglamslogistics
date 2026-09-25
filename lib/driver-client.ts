@@ -23,6 +23,11 @@ const API_BASE = (process.env.NEXT_PUBLIC_API_BASE_URL ?? "").replace(/\/$/, "")
  * bundled UI and nothing else, so the request 404s rather than erroring
  * obviously.
  */
+/** Origin the APK talks to, or "" for a same-origin web build. */
+export function apiBase(): string {
+  return API_BASE
+}
+
 export function apiUrl(path: string): string {
   if (!API_BASE || !path.startsWith("/")) return path
   return `${API_BASE}${path}`

@@ -5,12 +5,13 @@ import { useRouter } from "next/navigation"
 import { optimizeRouteOrder } from "@/lib/google-maps"
 import type { Driver, Order } from "@/lib/data"
 import { toast } from "@/hooks/use-toast"
-import { driverFetch, clearDriverToken } from "@/lib/driver-client"
+import { driverFetch, clearDriverToken, getDriverToken, apiBase } from "@/lib/driver-client"
 import { getPendingDeliveries, removePendingDelivery, pendingDeliveryCount as getPendingCount } from "@/lib/delivery-queue"
 import { getPendingStatusUpdates, removeStatusUpdate, pendingStatusCount } from "@/lib/status-queue"
 import { loadCachedOrders, saveCachedOrders, clearCachedOrders } from "@/lib/order-cache"
 import { onAppResume, startBackgroundLocation, getDeviceProtection, clearDeviceAdminFlag } from "@/lib/native-bridge"
 import { enqueueTrailPoint, flushTrailQueue, queuedTrailCount } from "@/lib/trail-queue"
+import { startNativeTracker, stopNativeTracker } from "@/lib/native-bridge"
 
 interface DriverSession {
   id: string
@@ -79,6 +80,13 @@ interface DriverContextValue {
    * say so rather than letting it fail invisibly.
    */
   backgroundTracking: boolean
+  /**
+   * True when the native Android service is doing the reporting.
+   *
+   * Surfaced because the UI must not warn that background tracking is off
+   * when it is in fact running — it just isn't running in the WebView.
+   */
+  nativeTracking: boolean
 }
 
 // Backoff bounds for flushing the offline write queues.
@@ -234,6 +242,10 @@ export function DriverProvider({ children }: { children: ReactNode }) {
   // True once the native foreground service is reporting, so the WebView
   // watcher stands down instead of duplicating every write.
   const backgroundTrackingRef = useRef(false)
+  // True once the native service has taken over reporting. Everything the
+  // WebView would otherwise do — background watcher, heartbeat — stands down,
+  // so a rider is neither reported twice nor shown two notifications.
+  const nativeTrackingRef = useRef(false)
   // Last fix actually written to history, so the thresholds above can be
   // applied without asking the server what it already has.
   const lastTrailRef = useRef<{ lat: number; lng: number; at: number } | null>(null)
@@ -243,6 +255,7 @@ export function DriverProvider({ children }: { children: ReactNode }) {
   const lastFixRef = useRef<{ lat: number; lng: number; speed?: number } | null>(null)
   const [backgroundTracking, setBackgroundTracking] = useState(false)
   const [trailQueued, setTrailQueued] = useState(0)
+  const [nativeTracking, setNativeTracking] = useState(false)
 
   // Load session from localStorage
   useEffect(() => {
@@ -310,6 +323,37 @@ export function DriverProvider({ children }: { children: ReactNode }) {
   }, [session])
 
   /**
+   * Hand reporting to the native service.
+   *
+   * This is the fix for riders disappearing from the dispatch map the moment
+   * they left the app. Reporting used to run in JavaScript, and Android
+   * suspends the WebView when an app is backgrounded — so the code doing the
+   * reporting was the code being stopped. Java keeps running behind the
+   * service's notification, so it reports regardless.
+   *
+   * The token is handed over here because the session lives in WebView
+   * storage, which Java cannot read.
+   */
+  useEffect(() => {
+    if (!session) return
+    const base = apiBase()
+    // Same-origin web builds have no APK and no service to start.
+    if (!base) return
+
+    let cancelled = false
+    void startNativeTracker({ apiBase: base, token: getDriverToken(), driverId: session.id })
+      .then((ok) => {
+        if (cancelled) return
+        nativeTrackingRef.current = ok
+        setNativeTracking(ok)
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [session])
+
+  /**
    * Background location, when the APK provides it.
    *
    * Runs a foreground service that keeps reporting after Android backgrounds
@@ -334,6 +378,15 @@ export function DriverProvider({ children }: { children: ReactNode }) {
     // visible rather than silent: the foreground service notification below
     // stays in the shade the entire time it is running.
     if (!session) return
+    // The native service already reports, and running both would mean two
+    // foreground notifications and double the writes for the same positions.
+    //
+    // Reads the state, not the ref: starting the native service is async, so
+    // on first render the ref is still false and this effect would race ahead
+    // and start a second watcher. Depending on the state means that when the
+    // service does take over, this effect re-runs and its cleanup tears the
+    // WebView watcher back down.
+    if (nativeTracking) return
     const sessionId = session.id
     let stop: null | (() => void) = null
     let cancelled = false
@@ -407,7 +460,7 @@ export function DriverProvider({ children }: { children: ReactNode }) {
     // service down and rebuilt it on every shift toggle, losing fixes across
     // the gap — which contradicted the comment above and undid the point of
     // keying on the session.
-  }, [session])
+  }, [session, nativeTracking])
 
   // Foreground GPS, used when the native service isn't available.
   useEffect(() => {
@@ -703,6 +756,28 @@ export function DriverProvider({ children }: { children: ReactNode }) {
   }, [session])
 
   /**
+   * One low-accuracy fix, or null if the device can't supply one in time.
+   *
+   * Low accuracy on purpose: this only has to prove the phone is reachable and
+   * roughly where it is, and a high-accuracy request wakes the GPS chip every
+   * minute for a stationary vehicle.
+   */
+  const currentPosition = useCallback((): Promise<{ lat: number; lng: number } | null> => {
+    if (typeof navigator === "undefined" || !navigator.geolocation) return Promise.resolve(null)
+    return new Promise((resolve) => {
+      navigator.geolocation.getCurrentPosition(
+        (pos) => {
+          const coords = { lat: pos.coords.latitude, lng: pos.coords.longitude }
+          lastFixRef.current = coords
+          resolve(coords)
+        },
+        () => resolve(null),
+        { enableHighAccuracy: false, maximumAge: 60_000, timeout: 20_000 },
+      )
+    })
+  }, [])
+
+  /**
    * Keep dispatch's view of this rider alive when the GPS is quiet.
    *
    * Deliberately not tied to isOnline or to the app being foregrounded: the
@@ -715,23 +790,41 @@ export function DriverProvider({ children }: { children: ReactNode }) {
    */
   const sendPositionHeartbeat = useCallback(async () => {
     if (!session) return
-    const fix = lastFixRef.current
-    if (!fix) return
+    // The native service runs its own heartbeat, and unlike this one it keeps
+    // running when Android suspends the WebView.
+    if (nativeTrackingRef.current) return
     if (Date.now() - lastGpsWriteRef.current < POSITION_HEARTBEAT_MS) return
+
+    // Acquire a position rather than only re-sending one.
+    //
+    // This originally returned early when it had no previous fix, which made
+    // it useless in exactly the case it was written for: the native watcher
+    // reports on movement, so a phone that has not moved since launch never
+    // produces a first fix, and a heartbeat waiting for one waits forever.
+    // Asking directly costs a single low-accuracy fix a minute and works from
+    // a cold start.
+    let fix = lastFixRef.current
+    if (!fix) fix = await currentPosition()
+    if (!fix) return
 
     lastGpsWriteRef.current = Date.now()
     try {
-      await driverFetch("/api/driver/location", {
+      const res = await driverFetch("/api/driver/location", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ driverId: session.id, lat: fix.lat, lng: fix.lng }),
       })
+      // Logged for the same reason as the background fixes above: a stationary
+      // phone produces no GPS activity at all, so without this there is no way
+      // to tell a heartbeat that fired from a WebView Android has suspended —
+      // which look identical from the server and need opposite fixes.
+      console.log(`[heartbeat] posted ${res.status}`)
     } catch {
       // Best-effort. The next beat retries, and a rider genuinely out of
       // contact *should* age out on the dispatch map rather than be faked
       // into looking live.
     }
-  }, [session])
+  }, [session, currentPosition])
 
   useEffect(() => {
     if (!session) return
@@ -1045,6 +1138,11 @@ export function DriverProvider({ children }: { children: ReactNode }) {
       clearCachedOrders(session.id)
       persistOnline(session.id, false)
     }
+    // Signing out is the documented off switch for tracking, so it has to
+    // stop the native service too — the notification promises exactly this.
+    void stopNativeTracker()
+    nativeTrackingRef.current = false
+    setNativeTracking(false)
     clearDriverToken()
     setSession(null)
     setDriver(null)
@@ -1078,9 +1176,10 @@ export function DriverProvider({ children }: { children: ReactNode }) {
     syncing,
     syncPending: async () => { await retryPendingRef.current?.() },
     backgroundTracking,
+    nativeTracking,
     trailQueued,
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }), [session, driver, orders, isOnline, justWentOnline, loadingSession, loadingOrders, drawerOpen, refreshOrders, patchOrder, optimizeRoute, liveGps, gpsError, pendingDeliveryCount, isConnected, syncing, backgroundTracking, trailQueued])
+  }), [session, driver, orders, isOnline, justWentOnline, loadingSession, loadingOrders, drawerOpen, refreshOrders, patchOrder, optimizeRoute, liveGps, gpsError, pendingDeliveryCount, isConnected, syncing, backgroundTracking, nativeTracking, trailQueued])
 
   return (
     <DriverContext.Provider value={contextValue}>

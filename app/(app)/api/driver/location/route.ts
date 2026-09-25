@@ -26,6 +26,15 @@ export async function POST(req: Request) {
       trail?: boolean
       /** Metres per second, when the device reports it. */
       speed?: number
+      /**
+       * When the fix was taken, in epoch milliseconds.
+       *
+       * Sent by the native tracker, which queues points while out of
+       * coverage. Without it the server's own clock is used, so a batch that
+       * waited out a dead zone would be filed at upload time and an hour of
+       * driving would collapse into a single instant.
+       */
+      t?: number
     }
     const lat = body.lat
     const lng = body.lng
@@ -67,10 +76,17 @@ export async function POST(req: Request) {
     // path's failure handling: losing a breadcrumb must never fail a live
     // position update, which is what dispatch actually depends on.
     if (body.trail) {
+      // Device clocks are only as trustworthy as the device, so a timestamp
+      // in the future or implausibly far back is ignored in favour of now —
+      // the same bounds the batch trail endpoint applies.
+      const now = Date.now()
+      const claimed = typeof body.t === "number" && Number.isFinite(body.t) ? body.t : now
+      const t = claimed > now + 60_000 || claimed < now - 30 * 24 * 60 * 60 * 1000 ? now : claimed
+
       void appendTrailPoint(driverId, {
         lat,
         lng,
-        t: Date.now(),
+        t,
         ...(typeof body.speed === "number" && Number.isFinite(body.speed) && body.speed >= 0
           ? { s: body.speed }
           : {}),

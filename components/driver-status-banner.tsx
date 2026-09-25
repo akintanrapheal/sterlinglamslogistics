@@ -16,7 +16,7 @@ import { CloudOff, Loader2, MapPinOff, RefreshCw, Settings, WifiOff } from "luci
  * space on a phone screen unless there is something to say.
  */
 export function DriverStatusBanner() {
-  const { isConnected, syncing, pendingDeliveryCount, gpsError, syncPending, session, isOnline, backgroundTracking, trailQueued } = useDriver()
+  const { isConnected, syncing, pendingDeliveryCount, gpsError, syncPending, session, isOnline, backgroundTracking, nativeTracking, trailQueued } = useDriver()
 
   // Nothing to report, or nobody logged in to report it to.
   if (!session) return null
@@ -24,7 +24,11 @@ export function DriverStatusBanner() {
   const showPending = pendingDeliveryCount > 0
   // Only meaningful inside the APK: on the web there is no foreground service
   // to be missing, so this would be a permanent false alarm.
-  const showBackgroundOff = isOnline && isNativeApp() && !backgroundTracking
+  // nativeTracking counts as background tracking. Reporting moved into the
+  // Android service, which leaves backgroundTracking (the WebView watcher)
+  // false by design — without this the warning showed permanently, including
+  // to drivers who had granted "all the time" exactly as it asked.
+  const showBackgroundOff = isOnline && isNativeApp() && !backgroundTracking && !nativeTracking
   // A backlog is normal for a few minutes; a large one means uploads are
   // failing, which previously produced no symptom at all on this end — the
   // office just saw an empty map hours later.
