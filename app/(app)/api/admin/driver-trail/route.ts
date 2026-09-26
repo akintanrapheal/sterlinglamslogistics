@@ -41,6 +41,20 @@ const MAX_PLAUSIBLE_SPEED_MS = 33
  */
 const MAX_PLAUSIBLE_JUMP_M = 2000
 
+/**
+ * A silence longer than this breaks the drawn route in two.
+ *
+ * Consecutive fixes were joined with a straight line however far apart they
+ * were, so a phone that stopped reporting — killed, out of coverage, or
+ * reinstalled — produced a line straight across whatever lay between, water
+ * included. That is not a route anyone drove, and it is worse than a gap
+ * because it looks like data.
+ *
+ * Five minutes is comfortably longer than the reporting cadence, so ordinary
+ * traffic never splits a route, while a genuine outage always does.
+ */
+const MAX_PATH_GAP_MS = 5 * 60_000
+
 function metres(a: TrailPoint, b: TrailPoint): number {
   const R = 6_371_000
   const toRad = (d: number) => (d * Math.PI) / 180
@@ -182,7 +196,13 @@ export async function GET(req: Request) {
 
       // Prefer the device's own speed; derive it only when absent, since a
       // derived figure is distorted by the gap between fixes.
-      const s = typeof cur.s === "number" ? cur.s : dt > 0 && d <= MAX_PLAUSIBLE_JUMP_M ? d / (dt / 1000) : 0
+      // A speed derived from two fixes is only meaningful when they are close
+      // together in time and space. Derived over a two-minute, kilometre-wide
+      // gap it reports the straight-line average of a route that curved — which
+      // is how a max speed of 118.6 km/h appeared, sitting exactly on the
+      // plausibility ceiling rather than measuring anything.
+      const derivable = dt > 0 && dt <= 60_000 && d <= 500
+      const s = typeof cur.s === "number" ? cur.s : derivable ? d / (dt / 1000) : 0
       // A derived speed is only as good as the gap it was measured over, so
       // implausible values are discarded rather than reported as a maximum.
       if (s > 0 && s <= MAX_PLAUSIBLE_SPEED_MS) {
@@ -195,8 +215,35 @@ export async function GET(req: Request) {
     // and are sampled, so drawn directly they cut across blocks and round off
     // corners. Falls back to raw points when snapping is unavailable — an
     // approximate route beats an empty map.
+    // Split before snapping, not after: each run is a separate journey, and
+    // asking the Roads API to match across a gap invites it to invent a
+    // plausible-looking route through streets nobody drove.
+    const runs: TrailPoint[][] = []
+    let run: TrailPoint[] = []
+    for (let i = 0; i < points.length; i++) {
+      if (i > 0) {
+        const gapMs = points[i].t - points[i - 1].t
+        const gapM = metres(points[i - 1], points[i])
+        if (gapMs > MAX_PATH_GAP_MS || gapM > MAX_PLAUSIBLE_JUMP_M) {
+          if (run.length > 0) runs.push(run)
+          run = []
+        }
+      }
+      run.push(points[i])
+    }
+    if (run.length > 0) runs.push(run)
+
     const wantSnap = searchParams.get("snap") !== "0"
-    const snapped = wantSnap ? await snapTrailToRoads(points) : null
+    const segments: Array<Array<{ lat: number; lng: number }>> = []
+    let anySnapped = false
+    for (const r of runs) {
+      // A pair of points is not a route; snapping one would just be two
+      // points on a road, so it is drawn as-is.
+      const snappedRun = wantSnap && r.length > 2 ? await snapTrailToRoads(r) : null
+      if (snappedRun) anySnapped = true
+      segments.push(snappedRun ?? r.map((p) => ({ lat: p.lat, lng: p.lng })))
+    }
+    const snapped = anySnapped ? segments.flat() : null
 
     const stops = detectStops(points)
     const stoppedMs = stops.reduce((sum, s) => sum + s.durationMs, 0)
@@ -213,6 +260,9 @@ export async function GET(req: Request) {
       // road, which would nudge a stop away from where the driver actually
       // waited and slightly alter measured distance.
       path: snapped ?? points.map((p) => ({ lat: p.lat, lng: p.lng })),
+      // The route as separate runs. Drawing these instead of `path` is what
+      // keeps a reporting outage looking like an outage rather than a journey.
+      segments,
       snapped: Boolean(snapped),
       stops,
       device,
