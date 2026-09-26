@@ -93,6 +93,17 @@ export default function DriverMapPage() {
         (o) => o.status === "started" || o.status === "picked-up" || o.status === "in-transit"
       )
       .sort((a, b) => {
+        // routeOrder first: it is the sequence dispatch arranged, and the
+        // numbers on these markers are what the rider drives by. Sorting by
+        // start time meant dragging an order on the dispatch board changed
+        // nothing here, so the office and the rider were reading different
+        // run orders off the same screen.
+        const aR = typeof a.routeOrder === "number" ? a.routeOrder : Number.POSITIVE_INFINITY
+        const bR = typeof b.routeOrder === "number" ? b.routeOrder : Number.POSITIVE_INFINITY
+        if (aR !== bR) return aR - bR
+
+        // Falls back to start time for orders dispatch never sequenced, so a
+        // mixed list still has a stable, sensible order.
         const aTime = parseFirestoreDate(a.startedAt)?.getTime() ?? 0
         const bTime = parseFirestoreDate(b.startedAt)?.getTime() ?? 0
         return aTime - bTime
