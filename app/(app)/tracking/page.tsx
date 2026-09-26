@@ -89,6 +89,15 @@ export default function TrackingPage() {
    * shift a stop away from where the driver actually waited.
    */
   const [path, setPath] = useState<google.maps.LatLngLiteral[]>([])
+  /**
+   * The route as separate runs, split where reporting stopped.
+   *
+   * Drawn instead of one continuous line: joining fixes across an outage drew
+   * a straight line through whatever lay between them — across the lagoon, in
+   * the case that prompted this — which reads as a journey rather than as
+   * missing data.
+   */
+  const [segments, setSegments] = useState<google.maps.LatLngLiteral[][]>([])
   const [snapped, setSnapped] = useState(false)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -169,6 +178,11 @@ export default function TrackingPage() {
       setSummary(json.summary ?? null)
       setDevice(json.device ?? null)
       setPath(json.path ?? (json.points ?? []).map((p: TrailPoint) => ({ lat: p.lat, lng: p.lng })))
+      setSegments(
+        Array.isArray(json.segments) && json.segments.length > 0
+          ? json.segments
+          : [json.path ?? (json.points ?? []).map((p: TrailPoint) => ({ lat: p.lat, lng: p.lng }))],
+      )
       setSnapped(Boolean(json.snapped))
     } catch (e) {
       setError(e instanceof Error ? e.message : "Could not load this driver's history")
@@ -196,23 +210,29 @@ export default function TrackingPage() {
     overlaysRef.current = []
     if (points.length === 0 || path.length === 0) return
 
-    const line = new google.maps.Polyline({
-      map,
-      path,
-      strokeColor: "#2563eb",
-      strokeOpacity: 0.85,
-      strokeWeight: 4,
-      // Arrows make the direction of travel readable, which matters when a
-      // route doubles back on itself.
-      icons: [
-        {
-          icon: { path: google.maps.SymbolPath.FORWARD_CLOSED_ARROW, scale: 2.5, strokeColor: "#1d4ed8" },
-          offset: "0",
-          repeat: "120px",
-        },
-      ],
-    })
-    overlaysRef.current.push(line)
+    // One polyline per run. The breaks between them are the point: where the
+    // phone stopped reporting, the map shows nothing rather than inventing a
+    // straight line across it.
+    for (const segment of segments) {
+      if (segment.length < 2) continue
+      const line = new google.maps.Polyline({
+        map,
+        path: segment,
+        strokeColor: "#2563eb",
+        strokeOpacity: 0.85,
+        strokeWeight: 4,
+        // Arrows make the direction of travel readable, which matters when a
+        // route doubles back on itself.
+        icons: [
+          {
+            icon: { path: google.maps.SymbolPath.FORWARD_CLOSED_ARROW, scale: 2.5, strokeColor: "#1d4ed8" },
+            offset: "0",
+            repeat: "120px",
+          },
+        ],
+      })
+      overlaysRef.current.push(line)
+    }
 
     const dot = (pos: google.maps.LatLngLiteral, color: string, label: string, title: string) =>
       new google.maps.Marker({
@@ -253,7 +273,7 @@ export default function TrackingPage() {
     const bounds = new google.maps.LatLngBounds()
     for (const p of path) bounds.extend(p)
     map.fitBounds(bounds, 48)
-  }, [mapReady, points, stops, path])
+  }, [mapReady, points, stops, path, segments])
 
   const zoomTo = useCallback((lat: number, lng: number) => {
     mapRef.current?.panTo({ lat, lng })
@@ -368,6 +388,7 @@ export default function TrackingPage() {
                 Tracked {formatTime(summary.firstSeen)} – {formatTime(summary.lastSeen)} ·{" "}
                 {summary.pointCount} points
                 {snapped ? " · matched to roads" : " · raw GPS"}
+                {segments.length > 1 && ` · ${segments.length - 1} reporting gap${segments.length > 2 ? "s" : ""}`}
               </p>
             )}
             {device?.supportsTrail && !device.uninstallBlocked && (
