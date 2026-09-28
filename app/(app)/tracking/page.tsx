@@ -234,6 +234,54 @@ export default function TrackingPage() {
       overlaysRef.current.push(line)
     }
 
+    // Join the runs with a dashed line.
+    //
+    // Splitting the route stopped gaps being drawn as if they were roads, but
+    // left them drawn as nothing, so a day with frequent dropouts rendered as
+    // disconnected fragments and read as a broken map rather than as missing
+    // data. Dashed says "we do not know what happened here" while keeping the
+    // day legible as one journey — and a solid line still only ever means a
+    // position that was actually recorded.
+    for (let i = 1; i < segments.length; i++) {
+      const prev = segments[i - 1]
+      const next = segments[i]
+      if (prev.length === 0 || next.length === 0) continue
+      const gap = new google.maps.Polyline({
+        map,
+        path: [prev[prev.length - 1], next[0]],
+        strokeOpacity: 0,
+        icons: [
+          {
+            icon: { path: "M 0,-1 0,1", strokeOpacity: 0.6, strokeColor: "#94a3b8", scale: 3 },
+            offset: "0",
+            repeat: "14px",
+          },
+        ],
+      })
+      overlaysRef.current.push(gap)
+    }
+
+    // A run of a single fix has no line to draw, so it would vanish entirely.
+    // Marked instead, so an isolated report still shows where the rider was.
+    for (const segment of segments) {
+      if (segment.length !== 1) continue
+      overlaysRef.current.push(
+        new google.maps.Marker({
+          map,
+          position: segment[0],
+          title: "Single report — no route recorded around it",
+          icon: {
+            path: google.maps.SymbolPath.CIRCLE,
+            scale: 4,
+            fillColor: "#2563eb",
+            fillOpacity: 0.9,
+            strokeColor: "#fff",
+            strokeWeight: 1.5,
+          },
+        }),
+      )
+    }
+
     const dot = (pos: google.maps.LatLngLiteral, color: string, label: string, title: string) =>
       new google.maps.Marker({
         map,

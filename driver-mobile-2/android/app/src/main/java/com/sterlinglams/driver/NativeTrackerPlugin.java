@@ -1,7 +1,11 @@
 package com.sterlinglams.driver;
 
+import android.content.Context;
 import android.content.Intent;
+import android.net.Uri;
 import android.os.Build;
+import android.os.PowerManager;
+import android.provider.Settings;
 
 import com.getcapacitor.JSObject;
 import com.getcapacitor.Plugin;
@@ -55,6 +59,68 @@ public class NativeTrackerPlugin extends Plugin {
         JSObject result = new JSObject();
         result.put("started", true);
         call.resolve(result);
+    }
+
+    /**
+     * Whether Android's battery saver is allowed to suspend this app.
+     *
+     * A foreground service is not sufficient on its own: the system still
+     * sleeps apps it considers idle, which is what left gaps in riders'
+     * trails. Reported separately from the request so the app can show the
+     * state rather than prompting a driver who has already granted it.
+     */
+    @PluginMethod
+    public void batteryStatus(PluginCall call) {
+        JSObject result = new JSObject();
+        result.put("exempt", isExempt());
+        call.resolve(result);
+    }
+
+    /**
+     * Ask for exemption from battery optimisation.
+     *
+     * Opens the system dialog. Android does not allow this to be granted
+     * silently, and it is the driver's choice — so the honest outcome is
+     * either a granted exemption or a visible reason why reporting may stall.
+     */
+    @PluginMethod
+    public void requestBatteryExemption(PluginCall call) {
+        if (isExempt()) {
+            JSObject already = new JSObject();
+            already.put("exempt", true);
+            call.resolve(already);
+            return;
+        }
+
+        try {
+            Intent intent = new Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS);
+            intent.setData(Uri.parse("package:" + getContext().getPackageName()));
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            getContext().startActivity(intent);
+        } catch (Exception e) {
+            // Some OEMs ship without the standard screen. Fall back to the
+            // app's settings page rather than failing silently, so a driver
+            // still has somewhere to go.
+            try {
+                Intent fallback = new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS);
+                fallback.setData(Uri.parse("package:" + getContext().getPackageName()));
+                fallback.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                getContext().startActivity(fallback);
+            } catch (Exception ignored) {
+                call.reject("Could not open battery settings: " + e.getMessage());
+                return;
+            }
+        }
+
+        JSObject result = new JSObject();
+        result.put("exempt", false);
+        call.resolve(result);
+    }
+
+    private boolean isExempt() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) return true;
+        PowerManager pm = (PowerManager) getContext().getSystemService(Context.POWER_SERVICE);
+        return pm != null && pm.isIgnoringBatteryOptimizations(getContext().getPackageName());
     }
 
     @PluginMethod

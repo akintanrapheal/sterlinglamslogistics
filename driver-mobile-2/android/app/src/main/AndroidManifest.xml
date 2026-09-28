@@ -97,6 +97,14 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <!--
+      Without this, Android's battery saver suspends the app after a period of
+      inactivity and location reporting stops — which is what produced repeated
+      gaps in riders' trails even with a foreground service running. Samsung and
+      the Chinese OEMs are the aggressive ones, and company phones spend hours
+      idle in a vehicle, which is exactly the state that triggers it.
+    -->
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
 
     <!-- Camera — proof-of-delivery photos -->
     <uses-permission android:name="android.permission.CAMERA" />
