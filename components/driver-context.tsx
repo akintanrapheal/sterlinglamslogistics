@@ -11,7 +11,7 @@ import { getPendingStatusUpdates, removeStatusUpdate, pendingStatusCount } from 
 import { loadCachedOrders, saveCachedOrders, clearCachedOrders } from "@/lib/order-cache"
 import { onAppResume, startBackgroundLocation, getDeviceProtection, clearDeviceAdminFlag } from "@/lib/native-bridge"
 import { enqueueTrailPoint, flushTrailQueue, queuedTrailCount } from "@/lib/trail-queue"
-import { startNativeTracker, stopNativeTracker } from "@/lib/native-bridge"
+import { startNativeTracker, stopNativeTracker, batteryExempt } from "@/lib/native-bridge"
 
 interface DriverSession {
   id: string
@@ -87,6 +87,14 @@ interface DriverContextValue {
    * when it is in fact running — it just isn't running in the WebView.
    */
   nativeTracking: boolean
+  /**
+   * False when Android's battery saver may suspend this app.
+   *
+   * A foreground service is not enough on its own, and being slept is what
+   * left repeated gaps in riders' trails. Surfaced so a driver can grant the
+   * exemption rather than the office discovering the gaps a day later.
+   */
+  batteryUnrestricted: boolean
 }
 
 // Backoff bounds for flushing the offline write queues.
@@ -256,6 +264,7 @@ export function DriverProvider({ children }: { children: ReactNode }) {
   const [backgroundTracking, setBackgroundTracking] = useState(false)
   const [trailQueued, setTrailQueued] = useState(0)
   const [nativeTracking, setNativeTracking] = useState(false)
+  const [batteryUnrestricted, setBatteryUnrestricted] = useState(true)
 
   // Load session from localStorage
   useEffect(() => {
@@ -342,10 +351,14 @@ export function DriverProvider({ children }: { children: ReactNode }) {
 
     let cancelled = false
     void startNativeTracker({ apiBase: base, token: getDriverToken(), driverId: session.id })
-      .then((ok) => {
+      .then(async (ok) => {
         if (cancelled) return
         nativeTrackingRef.current = ok
         setNativeTracking(ok)
+        // Checked after the service starts, not before: the exemption only
+        // matters once something is running that Android could suspend.
+        const exempt = await batteryExempt()
+        if (!cancelled && exempt !== null) setBatteryUnrestricted(exempt)
       })
 
     return () => {
@@ -1177,9 +1190,10 @@ export function DriverProvider({ children }: { children: ReactNode }) {
     syncPending: async () => { await retryPendingRef.current?.() },
     backgroundTracking,
     nativeTracking,
+    batteryUnrestricted,
     trailQueued,
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }), [session, driver, orders, isOnline, justWentOnline, loadingSession, loadingOrders, drawerOpen, refreshOrders, patchOrder, optimizeRoute, liveGps, gpsError, pendingDeliveryCount, isConnected, syncing, backgroundTracking, nativeTracking, trailQueued])
+  }), [session, driver, orders, isOnline, justWentOnline, loadingSession, loadingOrders, drawerOpen, refreshOrders, patchOrder, optimizeRoute, liveGps, gpsError, pendingDeliveryCount, isConnected, syncing, backgroundTracking, nativeTracking, batteryUnrestricted, trailQueued])
 
   return (
     <DriverContext.Provider value={contextValue}>

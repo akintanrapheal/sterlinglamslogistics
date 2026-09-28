@@ -1,7 +1,7 @@
 "use client"
 
 import { useDriver } from "@/components/driver-context"
-import { hapticTap, isNativeApp, openLocationSettings } from "@/lib/native-bridge"
+import { hapticTap, isNativeApp, openLocationSettings, requestBatteryExemption } from "@/lib/native-bridge"
 import { CloudOff, Loader2, MapPinOff, RefreshCw, Settings, WifiOff } from "lucide-react"
 
 /**
@@ -16,7 +16,7 @@ import { CloudOff, Loader2, MapPinOff, RefreshCw, Settings, WifiOff } from "luci
  * space on a phone screen unless there is something to say.
  */
 export function DriverStatusBanner() {
-  const { isConnected, syncing, pendingDeliveryCount, gpsError, syncPending, session, isOnline, backgroundTracking, nativeTracking, trailQueued } = useDriver()
+  const { isConnected, syncing, pendingDeliveryCount, gpsError, syncPending, session, isOnline, backgroundTracking, nativeTracking, batteryUnrestricted, trailQueued } = useDriver()
 
   // Nothing to report, or nobody logged in to report it to.
   if (!session) return null
@@ -33,7 +33,10 @@ export function DriverStatusBanner() {
   // failing, which previously produced no symptom at all on this end — the
   // office just saw an empty map hours later.
   const showTrailBacklog = trailQueued >= 50
-  if (!showOffline && !showPending && !gpsError && !showBackgroundOff && !showTrailBacklog) return null
+  // Only worth raising once the service is actually running — before that,
+  // the location permission above is the thing to fix first.
+  const showBatteryRestricted = nativeTracking && !batteryUnrestricted
+  if (!showOffline && !showPending && !gpsError && !showBackgroundOff && !showTrailBacklog && !showBatteryRestricted) return null
 
   async function onRetry() {
     void hapticTap()
@@ -92,6 +95,22 @@ export function DriverStatusBanner() {
           <button
             type="button"
             onClick={() => { void hapticTap(); void openLocationSettings() }}
+            className="flex h-8 shrink-0 items-center gap-1.5 rounded-full bg-black/20 px-3 text-xs font-semibold active:bg-black/30"
+          >
+            <Settings className="h-3.5 w-3.5" />
+            Fix
+          </button>
+        </Banner>
+      )}
+
+      {showBatteryRestricted && (
+        <Banner tone="warning" icon={<MapPinOff className="h-4 w-4 shrink-0" />}>
+          <span className="flex-1">
+            Battery saver can stop location updates. Allow unrestricted battery use.
+          </span>
+          <button
+            type="button"
+            onClick={() => { void hapticTap(); void requestBatteryExemption() }}
             className="flex h-8 shrink-0 items-center gap-1.5 rounded-full bg-black/20 px-3 text-xs font-semibold active:bg-black/30"
           >
             <Settings className="h-3.5 w-3.5" />

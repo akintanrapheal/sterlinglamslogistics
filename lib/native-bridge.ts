@@ -190,6 +190,38 @@ export async function startNativeTracker(opts: {
   }
 }
 
+/**
+ * Whether Android's battery saver may suspend this app.
+ *
+ * A foreground service does not exempt an app from being slept when the system
+ * decides it is idle — which is what left repeated gaps in riders' trails even
+ * with the service running correctly.
+ */
+export async function batteryExempt(): Promise<boolean | null> {
+  const plugin = (getCapacitor()?.Plugins as Record<string, unknown> | undefined)?.NativeTracker as
+    | { batteryStatus?: () => Promise<{ exempt?: boolean }> }
+    | undefined
+  if (!plugin?.batteryStatus) return null
+  try {
+    const res = await plugin.batteryStatus()
+    return Boolean(res?.exempt)
+  } catch {
+    return null
+  }
+}
+
+/** Open the system dialog asking to be exempted. Driver's choice to grant. */
+export async function requestBatteryExemption(): Promise<void> {
+  const plugin = (getCapacitor()?.Plugins as Record<string, unknown> | undefined)?.NativeTracker as
+    | { requestBatteryExemption?: () => Promise<unknown> }
+    | undefined
+  try {
+    await plugin?.requestBatteryExemption?.()
+  } catch {
+    /* ignore */
+  }
+}
+
 /** Stop the native service. Called on sign-out — the documented off switch. */
 export async function stopNativeTracker(): Promise<void> {
   const plugin = (getCapacitor()?.Plugins as Record<string, unknown> | undefined)?.NativeTracker as
