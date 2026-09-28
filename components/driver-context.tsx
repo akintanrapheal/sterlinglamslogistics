@@ -361,8 +361,25 @@ export function DriverProvider({ children }: { children: ReactNode }) {
         if (!cancelled && exempt !== null) setBatteryUnrestricted(exempt)
       })
 
+    // Re-checked whenever the app returns to the foreground.
+    //
+    // Granting the exemption means leaving for Android's own settings screen,
+    // so a one-time check at startup can never observe the result — the
+    // warning stayed up after the driver had already done what it asked,
+    // which reads as the app being broken.
+    let removeResume: (() => void) | undefined
+    void onAppResume(() => {
+      void batteryExempt().then((exempt) => {
+        if (!cancelled && exempt !== null) setBatteryUnrestricted(exempt)
+      })
+    }).then((fn) => {
+      if (cancelled) fn?.()
+      else removeResume = fn
+    })
+
     return () => {
       cancelled = true
+      removeResume?.()
     }
   }, [session])
 
