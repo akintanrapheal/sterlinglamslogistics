@@ -92,26 +92,53 @@ public class NativeTrackerPlugin extends Plugin {
             return;
         }
 
-        try {
-            Intent intent = new Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS);
-            intent.setData(Uri.parse("package:" + getContext().getPackageName()));
-            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-            getContext().startActivity(intent);
-        } catch (Exception e) {
-            // Some OEMs ship without the standard screen. Fall back to the
-            // app's settings page rather than failing silently, so a driver
-            // still has somewhere to go.
-            try {
-                Intent fallback = new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS);
-                fallback.setData(Uri.parse("package:" + getContext().getPackageName()));
-                fallback.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-                getContext().startActivity(fallback);
-            } catch (Exception ignored) {
-                call.reject("Could not open battery settings: " + e.getMessage());
-                return;
-            }
+        // Launched from the Activity, not the application Context.
+        //
+        // Starting it from the Context did nothing at all on Samsung: the
+        // button appeared dead because the intent was silently dropped rather
+        // than throwing, so even the fallback never ran.
+        String pkg = getContext().getPackageName();
+
+        if (tryStart(new Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS)
+                .setData(Uri.parse("package:" + pkg)))) {
+            resolveNotExempt(call);
+            return;
         }
 
+        // The full battery-optimisation list. Not pre-filtered to this app, but
+        // it is a real screen on every OEM that hides the direct dialog.
+        if (tryStart(new Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))) {
+            resolveNotExempt(call);
+            return;
+        }
+
+        // Last resort: the app's own settings page, which always exists and
+        // has battery somewhere inside it. Worse, but never a dead button.
+        if (tryStart(new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS)
+                .setData(Uri.parse("package:" + pkg)))) {
+            resolveNotExempt(call);
+            return;
+        }
+
+        call.reject("Could not open battery settings on this device");
+    }
+
+    /** Start an intent from the Activity, reporting whether it went anywhere. */
+    private boolean tryStart(Intent intent) {
+        try {
+            if (getActivity() != null) {
+                getActivity().startActivity(intent);
+            } else {
+                intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                getContext().startActivity(intent);
+            }
+            return true;
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    private void resolveNotExempt(PluginCall call) {
         JSObject result = new JSObject();
         result.put("exempt", false);
         call.resolve(result);
