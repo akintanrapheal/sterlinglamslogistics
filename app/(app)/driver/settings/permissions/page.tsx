@@ -26,6 +26,7 @@ export default function DriverPermissionsPage() {
   const router = useRouter()
   const { nativeTracking, batteryUnrestricted } = useDriver()
   const [battery, setBattery] = useState<boolean | null>(null)
+  const [lastError, setLastError] = useState<string | null>(null)
 
   useEffect(() => {
     let cancelled = false
@@ -51,6 +52,13 @@ export default function DriverPermissionsPage() {
   }, [])
 
   const batteryOk = battery ?? batteryUnrestricted
+
+  // Shows the reason when no settings screen can be opened, rather than
+  // leaving the driver tapping a button that appears to do nothing.
+  const handleBattery = async () => {
+    const res = await requestBatteryExemption()
+    setLastError(res.opened || res.exempt ? null : res.detail)
+  }
 
   return (
     <div className="mx-auto max-w-md px-4 pb-8">
@@ -84,9 +92,17 @@ export default function DriverPermissionsPage() {
           body="Without this, Android puts the app to sleep after a while and location updates stop — even though everything looks fine on your screen."
           status={isNativeApp() ? batteryOk : null}
           action={batteryOk ? "Change" : "Allow"}
-          onAction={() => { void hapticTap(); void requestBatteryExemption() }}
+          onAction={() => { void hapticTap(); void handleBattery() }}
         />
       </div>
+
+      {lastError && (
+        <p className="mt-4 rounded-xl bg-red-50 p-3 text-xs text-red-900 dark:bg-red-950/40 dark:text-red-200">
+          This phone would not open its battery settings. Open Settings, find
+          this app, and set battery use to Unrestricted.
+          <span className="mt-1 block opacity-60">({lastError})</span>
+        </p>
+      )}
 
       {isNativeApp() && !nativeTracking && (
         <p className="mt-6 rounded-xl bg-amber-50 p-3 text-xs text-amber-900 dark:bg-amber-950/40 dark:text-amber-200">
