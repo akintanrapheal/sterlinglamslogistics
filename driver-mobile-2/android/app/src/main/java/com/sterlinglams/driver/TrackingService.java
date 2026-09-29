@@ -94,6 +94,21 @@ public class TrackingService extends Service implements LocationListener {
      */
     private static final long HEARTBEAT_MS = 60_000L;
 
+    /**
+     * How often a stationary phone still contributes a point to history.
+     *
+     * Heartbeats were excluded from the trail entirely, to stop a vehicle
+     * parked overnight filling the day with one identical point a minute. The
+     * effect was worse than the problem: with no points recorded while
+     * stopped, every stop became a hole in the trail, and a day with seven
+     * hours of stops read as forty-two reporting failures. The rider had in
+     * fact reported all day.
+     *
+     * Two minutes keeps a stop continuous — comfortably inside the five-minute
+     * gap the map splits on — at thirty points an hour rather than sixty.
+     */
+    private static final long STATIONARY_TRAIL_MS = 2 * 60_000L;
+
     /** Buffered points survive no-signal; the oldest are dropped under pressure. */
     private static final String PREFS = "nativeTracker";
     private static final String KEY_QUEUE = "queue";
@@ -108,6 +123,7 @@ public class TrackingService extends Service implements LocationListener {
     private Location lastLocation;
     private long lastPostAt = 0L;
     private long lastGpsAt = 0L;
+    private long lastTrailAt = 0L;
 
     private final ExecutorService io = Executors.newSingleThreadExecutor();
 
@@ -116,7 +132,15 @@ public class TrackingService extends Service implements LocationListener {
         public void run() {
             if (System.currentTimeMillis() - lastPostAt >= HEARTBEAT_MS) {
                 Location known = lastLocation != null ? lastLocation : lastKnown();
-                if (known != null) post(known, false);
+                if (known != null) {
+                    // Recorded in history only every few beats, and only when
+                    // the fix is good enough to draw from — a stop should read
+                    // as a stop, not as missing data, but it should not be
+                    // drawn out of coarse fixes either.
+                    boolean keep = System.currentTimeMillis() - lastTrailAt >= STATIONARY_TRAIL_MS
+                            && (!known.hasAccuracy() || known.getAccuracy() <= MAX_TRAIL_ACCURACY_M);
+                    post(known, keep);
+                }
             }
             handler.postDelayed(this, HEARTBEAT_MS / 2);
         }
@@ -224,6 +248,7 @@ public class TrackingService extends Service implements LocationListener {
     private void post(Location location, boolean trail) {
         if (apiBase == null || driverId == null) return;
         lastPostAt = System.currentTimeMillis();
+        if (trail) lastTrailAt = lastPostAt;
 
         try {
             JSONObject point = new JSONObject();

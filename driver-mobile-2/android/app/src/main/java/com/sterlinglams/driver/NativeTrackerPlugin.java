@@ -85,6 +85,7 @@ public class NativeTrackerPlugin extends Plugin {
      */
     @PluginMethod
     public void requestBatteryExemption(PluginCall call) {
+        attempts.clear();
         if (isExempt()) {
             JSObject already = new JSObject();
             already.put("exempt", true);
@@ -101,14 +102,14 @@ public class NativeTrackerPlugin extends Plugin {
 
         if (tryStart(new Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS)
                 .setData(Uri.parse("package:" + pkg)))) {
-            resolveNotExempt(call);
+            resolveNotExempt(call, "direct");
             return;
         }
 
         // The full battery-optimisation list. Not pre-filtered to this app, but
         // it is a real screen on every OEM that hides the direct dialog.
         if (tryStart(new Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))) {
-            resolveNotExempt(call);
+            resolveNotExempt(call, "list");
             return;
         }
 
@@ -116,15 +117,33 @@ public class NativeTrackerPlugin extends Plugin {
         // has battery somewhere inside it. Worse, but never a dead button.
         if (tryStart(new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS)
                 .setData(Uri.parse("package:" + pkg)))) {
-            resolveNotExempt(call);
+            resolveNotExempt(call, "appDetails");
             return;
         }
 
-        call.reject("Could not open battery settings on this device");
+        // Every route refused. Reported with the reasons rather than rejected
+        // with a generic message: "the button does nothing" was impossible to
+        // diagnose precisely because the failure carried no detail.
+        JSObject failed = new JSObject();
+        failed.put("exempt", false);
+        failed.put("opened", false);
+        failed.put("via", "none");
+        failed.put("errors", String.join(" | ", attempts));
+        call.resolve(failed);
     }
+
+    /** Reasons each route refused, so a dead button can be explained. */
+    private final java.util.List<String> attempts = new java.util.ArrayList<>();
 
     /** Start an intent from the Activity, reporting whether it went anywhere. */
     private boolean tryStart(Intent intent) {
+        // Checked before starting: on several OEMs startActivity for a missing
+        // settings screen neither throws nor opens anything, which is how this
+        // button came to look dead rather than broken.
+        if (getContext().getPackageManager().resolveActivity(intent, 0) == null) {
+            attempts.add(intent.getAction() + ": no activity");
+            return false;
+        }
         try {
             if (getActivity() != null) {
                 getActivity().startActivity(intent);
@@ -134,13 +153,16 @@ public class NativeTrackerPlugin extends Plugin {
             }
             return true;
         } catch (Exception e) {
+            attempts.add(intent.getAction() + ": " + e.getClass().getSimpleName());
             return false;
         }
     }
 
-    private void resolveNotExempt(PluginCall call) {
+    private void resolveNotExempt(PluginCall call, String via) {
         JSObject result = new JSObject();
         result.put("exempt", false);
+        result.put("opened", true);
+        result.put("via", via);
         call.resolve(result);
     }
 
