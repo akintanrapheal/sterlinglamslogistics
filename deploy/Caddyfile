@@ -1,0 +1,10 @@
+# Caddy reverse proxy with automatic HTTPS (Let's Encrypt).
+# 1. Replace your-domain.com with your real domain (which must point its A record
+#    at this VM's public IP, and ports 80 + 443 must be open).
+# 2. Copy this to /etc/caddy/Caddyfile, then: sudo systemctl reload caddy
+# Caddy fetches + renews the TLS certificate on its own.
+
+your-domain.com {
+	encode zstd gzip
+	reverse_proxy localhost:3000
+}
