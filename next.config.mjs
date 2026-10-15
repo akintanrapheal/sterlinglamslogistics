@@ -6,7 +6,9 @@ const rootDir = path.dirname(fileURLToPath(import.meta.url))
 
 /** @type {import('next').NextConfig} */
 const nextConfig = {
-  output: "standalone",
+  // "standalone" is for self-hosting (Docker / the Oracle VM deploy). Netlify's Next.js runtime builds
+  // and routes the app itself and does NOT want a standalone output, so skip it when building on Netlify.
+  output: process.env.NETLIFY ? undefined : "standalone",
   turbopack: {
     root: rootDir,
     resolveAlias: {
