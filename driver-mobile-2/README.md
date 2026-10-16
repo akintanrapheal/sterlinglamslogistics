@@ -92,35 +92,33 @@ time, and `lib/driver-client.ts`'s `driverFetch` prepends that base to
 any path-relative request. If you ever need to point at a staging server,
 pass `-ApiBase "https://staging.example.com"` to `build.ps1`.
 
-### Why the default is the Vercel origin
+### Why the default is the apex domain
 
-`-ApiBase` defaults to `https://sterlinglamslogistics.vercel.app`, **not**
-the apex `https://sterlinglamslogistics.com`, because drivers hit
-intermittent `403`s on the apex.
+`-ApiBase` defaults to `https://sterlinglamslogistics.com`.
 
-What is established: the apex resolves to Cloudflare (`Server: cloudflare`),
-the Vercel origin does not, and the app itself is not the source — both
-origins answer a token-less `/api/driver/profile` with a correct `401` and
-a correct CORS preflight. So the `403` is injected by an edge that only
-exists in front of the apex.
+It did not always. Drivers hit intermittent `403`s on the apex while it was
+fronted by an edge that the Vercel origin sat behind — established at the
+time by the apex resolving to Cloudflare, the Vercel origin not, and both
+answering a token-less `/api/driver/profile` with a correct `401`. The `403`
+was injected between the driver and the app, so the default moved to Vercel
+to skip it. The exact rule was never identified; the likely trigger was the
+custom User-Agent (`SterlinDriverApp2`, see `capacitor.config.ts`) matching
+a bot-fight rule, which fits a per-request, "sometimes" failure.
 
-What is *not* confirmed: the exact Cloudflare rule. The likely trigger is
-the custom User-Agent — the WebView appends `SterlinDriverApp2` (see
-`capacitor.config.ts`) — flagged by bot-fight/WAF rules, which would explain
-a per-request, "sometimes" failure. This has not been reproduced on demand;
-to confirm it, check the Cloudflare dashboard's Security Events for blocked
-requests to `/api/driver/*` and read the rule that matched.
+Hosting has since moved to Netlify and the apex points there, so that edge
+is no longer in the path. Before switching the default back, the apex was
+checked for the three things the APK depends on:
 
-Talking to Vercel directly skips that edge. The trade-off is that you also
-skip Cloudflare's caching and DDoS protection for driver API traffic — an
-acceptable deal for a handful of authenticated drivers, but reconsider it
-if the driver fleet grows a lot.
+- `/api/driver/location` and `/api/driver/trail` answer a token-less request
+  with `401` — the routes exist and reject properly, rather than `404`
+  (not deployed) or `403` (something in front of them)
+- the CORS preflight returns `Access-Control-Allow-Origin: https://localhost`
+  with `Access-Control-Allow-Credentials: true` — the APK's own origin
+- `/api/maps-key` answers (`405` to a POST, since it is GET-only)
 
-The cleaner long-term fix is a Cloudflare WAF skip rule for the driver
-app's User-Agent (or its `X-Driver-Token` header), which would let the
-apex work and keep the protection. Once that rule exists, flip the default
-back with `-ApiBase "https://sterlinglamslogistics.com"`. Both origins are
-already in `allowNavigation`, so no other change is needed.
+If drivers report `403`s again, this is the first thing to suspect, and
+`-ApiBase "https://sterlinglamslogistics.vercel.app"` moves them off the apex
+without any other change — both origins stay in `allowNavigation`.
 
 Note this only affects the **bundled APK**. The web app at the apex is
 same-origin and leaves `NEXT_PUBLIC_API_BASE_URL` empty, so it is

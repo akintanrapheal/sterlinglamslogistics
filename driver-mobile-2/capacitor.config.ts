@@ -10,14 +10,14 @@ import type { CapacitorConfig } from "@capacitor/cli"
  *     original driver-mobile during A/B testing on the same device.
  *
  * The bundled app calls the API origin baked in at build time by
- * build.ps1 (-ApiBase, default https://sterlinglamslogistics.vercel.app)
- * for data — only the UI is local. allowNavigation keeps the WebView
- * permitted to talk to the real API origin.
+ * build.ps1 (-ApiBase, default https://sterlinglamslogistics.com) for data —
+ * only the UI is local. allowNavigation keeps the WebView permitted to talk
+ * to the real API origin.
  *
- * Both the Vercel origin and the apex domain are allowlisted so flipping
- * -ApiBase between them needs no change here. The Vercel origin is the
- * default because the apex is fronted by Cloudflare, which intermittently
- * 403s this app's requests (custom UA below trips its bot rules).
+ * The apex is the default again now that hosting has moved to Netlify. The
+ * Vercel origin stays allowlisted so a build can be pointed back at it
+ * without touching this file — useful if the apex ever misbehaves, which is
+ * why the default moved away from it in the first place.
  */
 const config: CapacitorConfig = {
   // Must match applicationId in android/app/build.gradle — cap sync does not
