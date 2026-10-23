@@ -1,0 +1,148 @@
+# Firebase App Hosting configuration for sterlinglamslogistics (Next.js 16).
+# Docs: https://firebase.google.com/docs/app-hosting/configure
+#
+# HOW THIS WORKS
+#  - `value:`  entries are plain config, committed here (safe for NON-secret / public values).
+#  - `secret:` entries reference a secret in Google Cloud Secret Manager by NAME. You create each
+#    one ONCE with:  firebase apphosting:secrets:set <NAME>   (it prompts for the value and grants
+#    the backend access). Nothing sensitive is ever committed to this repo.
+#  - availability BUILD = inlined at build time (needed for every NEXT_PUBLIC_* value);
+#    RUNTIME = read by the running server.
+#
+# BEFORE YOUR FIRST DEPLOY: fill in the NEXT_PUBLIC_* values below, and create the 9 secrets
+# listed at the bottom. See the setup steps shared alongside this file.
+
+runConfig:
+  # Scale to zero when idle to keep cost low (brief cold start on the first request after idle).
+  minInstances: 0
+  maxInstances: 5
+  cpu: 1
+  memoryMiB: 512
+  concurrency: 80
+
+env:
+  # ── Runtime ───────────────────────────────────────────────────────────────
+  - variable: NODE_ENV
+    value: production
+    availability: [RUNTIME]
+  - variable: LOG_LEVEL
+    value: info
+    availability: [RUNTIME]
+
+  # ── Public app config (inlined at build — must be present when `pnpm build` runs) ──
+  - variable: NEXT_PUBLIC_SITE_ORIGIN
+    value: https://sterlinglamslogistics.com
+    availability: [BUILD, RUNTIME]
+  - variable: NEXT_PUBLIC_API_BASE_URL
+    value: https://sterlinglamslogistics.com
+    availability: [BUILD, RUNTIME]
+  - variable: NEXT_PUBLIC_HUB_LAT
+    value: ""   # TODO: your dispatch hub latitude
+    availability: [BUILD, RUNTIME]
+  - variable: NEXT_PUBLIC_HUB_LNG
+    value: ""   # TODO: your dispatch hub longitude
+    availability: [BUILD, RUNTIME]
+
+  # ── Firebase (client / public — safe to expose; they ship in the browser bundle) ──
+  - variable: NEXT_PUBLIC_FIREBASE_API_KEY
+    value: ""   # TODO
+    availability: [BUILD, RUNTIME]
+  - variable: NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN
+    value: ""   # TODO
+    availability: [BUILD, RUNTIME]
+  - variable: NEXT_PUBLIC_FIREBASE_PROJECT_ID
+    value: ""   # TODO
+    availability: [BUILD, RUNTIME]
+  - variable: NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET
+    value: ""   # TODO
+    availability: [BUILD, RUNTIME]
+  - variable: NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID
+    value: ""   # TODO
+    availability: [BUILD, RUNTIME]
+  - variable: NEXT_PUBLIC_FIREBASE_APP_ID
+    value: ""   # TODO
+    availability: [BUILD, RUNTIME]
+
+  # ── Google Maps (restrict the key by HTTP referrer in the Google Cloud console) ──
+  - variable: NEXT_PUBLIC_GOOGLE_MAPS_KEY
+    value: ""   # TODO
+    availability: [BUILD, RUNTIME]
+  - variable: NEXT_PUBLIC_GOOGLE_MAPS_MAP_ID
+    value: ""   # TODO
+    availability: [BUILD, RUNTIME]
+
+  # ── Twilio sender identifiers (not secret — the tokens below are) ──
+  - variable: NOTIFY_FROM_EMAIL
+    value: ""   # TODO e.g. notifications@sterlinglamslogistics.com
+    availability: [RUNTIME]
+  - variable: TWILIO_SMS_FROM
+    value: ""   # TODO
+    availability: [RUNTIME]
+  - variable: TWILIO_WHATSAPP_FROM
+    value: ""   # TODO
+    availability: [RUNTIME]
+  - variable: TWILIO_WHATSAPP_MESSAGING_SERVICE_SID
+    value: ""   # TODO
+    availability: [RUNTIME]
+  - variable: TWILIO_WHATSAPP_CONTENT_SID
+    value: ""   # TODO
+    availability: [RUNTIME]
+  - variable: TWILIO_WHATSAPP_CONTENT_SID_ORDER_ACCEPTED
+    value: ""   # TODO
+    availability: [RUNTIME]
+  - variable: TWILIO_WHATSAPP_CONTENT_SID_OUT_FOR_DELIVERY
+    value: ""   # TODO
+    availability: [RUNTIME]
+  - variable: TWILIO_WHATSAPP_CONTENT_SID_DELIVERED
+    value: ""   # TODO
+    availability: [RUNTIME]
+
+  # ── Upstash REST URL (not secret; the token is a secret below) ──
+  - variable: UPSTASH_REDIS_REST_URL
+    value: ""   # TODO
+    availability: [RUNTIME]
+
+  # ── Outbound webhook target ──
+  - variable: STORE_DELIVERED_WEBHOOK_URL
+    value: ""   # TODO (the Sterlin Glams store endpoint)
+    availability: [RUNTIME]
+
+  # ── Secrets (create each with:  firebase apphosting:secrets:set <NAME>) ──
+  - variable: FIREBASE_SERVICE_ACCOUNT_KEY
+    secret: FIREBASE_SERVICE_ACCOUNT_KEY
+    availability: [RUNTIME]
+  - variable: CRON_SECRET
+    secret: CRON_SECRET
+    availability: [RUNTIME]
+  - variable: DRIVER_SESSION_SECRET
+    secret: DRIVER_SESSION_SECRET
+    availability: [RUNTIME]
+  - variable: STORE_WEBHOOK_SECRET
+    secret: STORE_WEBHOOK_SECRET
+    availability: [RUNTIME]
+  - variable: WOOCOMMERCE_WEBHOOK_SECRET
+    secret: WOOCOMMERCE_WEBHOOK_SECRET
+    availability: [RUNTIME]
+  - variable: RESEND_API_KEY
+    secret: RESEND_API_KEY
+    availability: [RUNTIME]
+  - variable: TWILIO_ACCOUNT_SID
+    secret: TWILIO_ACCOUNT_SID
+    availability: [RUNTIME]
+  - variable: TWILIO_AUTH_TOKEN
+    secret: TWILIO_AUTH_TOKEN
+    availability: [RUNTIME]
+  - variable: UPSTASH_REDIS_REST_TOKEN
+    secret: UPSTASH_REDIS_REST_TOKEN
+    availability: [RUNTIME]
+
+  # ── Sentry (build-time, optional — uncomment if you want source maps uploaded) ──
+  # - variable: SENTRY_ORG
+  #   value: ""
+  #   availability: [BUILD]
+  # - variable: SENTRY_PROJECT
+  #   value: ""
+  #   availability: [BUILD]
+  # - variable: SENTRY_AUTH_TOKEN
+  #   secret: SENTRY_AUTH_TOKEN
+  #   availability: [BUILD]
