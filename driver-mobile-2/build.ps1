@@ -30,15 +30,20 @@
 
 param(
     [switch]$Build,
-    # Default to the Vercel origin rather than the apex domain. Drivers hit
-    # intermittent 403s on the apex, which sits behind Cloudflare; the Vercel
-    # origin does not, and both answer the API correctly otherwise. So the 403
-    # comes from that edge. Hitting Vercel directly skips it. See README.md
-    # ("Why the default is the Vercel origin") for what is and isn't confirmed.
+    # The apex domain. Hosting moved from Vercel to Netlify, and the apex
+    # now points there.
     #
-    # To go back to the Cloudflare-fronted apex:
-    #   .\build.ps1 -ApiBase "https://sterlinglamslogistics.com"
-    [string]$ApiBase = "https://sterlinglamslogistics.vercel.app",
+    # It defaulted to the Vercel origin because drivers hit intermittent
+    # 403s on the apex, injected by an edge that only sat in front of it.
+    # That edge is gone with the move, and the apex was verified serving
+    # what the APK needs: /api/driver/* answers a token-less request with
+    # 401 rather than 403 or 404, and the CORS preflight returns
+    # Access-Control-Allow-Origin: https://localhost with credentials,
+    # which is the APK's own origin.
+    #
+    # Worth re-checking first if drivers report 403s again, since that is
+    # exactly what the symptom looked like last time.
+    [string]$ApiBase = "https://sterlinglamslogistics.com",
 
     # Vector Map ID from Google Cloud Console. Two-finger rotate and tilt only
     # work on a vector map; without an ID Google serves a raster map, where

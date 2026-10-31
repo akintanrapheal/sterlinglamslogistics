@@ -2,6 +2,7 @@
 
 import { useDriver } from "@/components/driver-context"
 import { hapticTap, isNativeApp, openLocationSettings, requestBatteryExemption } from "@/lib/native-bridge"
+import { toast } from "@/hooks/use-toast"
 import { CloudOff, Loader2, MapPinOff, RefreshCw, Settings, WifiOff } from "lucide-react"
 
 /**
@@ -36,6 +37,24 @@ export function DriverStatusBanner() {
   // Only worth raising once the service is actually running — before that,
   // the location permission above is the thing to fix first.
   const showBatteryRestricted = nativeTracking && !batteryUnrestricted
+
+  /**
+   * Ask for the exemption, and say something either way.
+   *
+   * A silent failure here is indistinguishable from the tap never registering,
+   * which is exactly how this went unexplained: the button appeared dead and
+   * carried no information about why.
+   */
+  const handleBatteryFix = async () => {
+    const res = await requestBatteryExemption()
+    if (res.opened || res.exempt) return
+    toast({
+      title: "Could not open battery settings",
+      description:
+        "Open your phone's Settings, find this app, and set battery use to Unrestricted.",
+      variant: "destructive",
+    })
+  }
   if (!showOffline && !showPending && !gpsError && !showBackgroundOff && !showTrailBacklog && !showBatteryRestricted) return null
 
   async function onRetry() {
@@ -110,7 +129,7 @@ export function DriverStatusBanner() {
           </span>
           <button
             type="button"
-            onClick={() => { void hapticTap(); void requestBatteryExemption() }}
+            onClick={() => { void hapticTap(); void handleBatteryFix() }}
             className="flex h-8 shrink-0 items-center gap-1.5 rounded-full bg-black/20 px-3 text-xs font-semibold active:bg-black/30"
           >
             <Settings className="h-3.5 w-3.5" />
