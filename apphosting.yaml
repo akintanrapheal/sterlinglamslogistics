@@ -104,7 +104,7 @@ env:
 
   # ── Outbound webhook target ──
   - variable: STORE_DELIVERED_WEBHOOK_URL
-    value: ""   # TODO (the Sterlin Glams store endpoint)
+    value: "https://sterlinglams.com/webhooks/logistics/delivered"
     availability: [RUNTIME]
 
   # ── Secrets (create each with:  firebase apphosting:secrets:set <NAME>) ──
