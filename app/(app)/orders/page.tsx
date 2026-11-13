@@ -64,6 +64,7 @@ import { BulkAssignDialog } from "@/components/orders/bulk-assign-dialog"
 import { formatOrderTime, formatDistance, handlePrintOrder, handlePrintLabel } from "@/lib/order-utils"
 import { ORDER_STATUS, DRIVER_STATUS, ACTIVE_STATUSES, TERMINAL_STATUSES } from "@/lib/constants"
 import { useAuth } from "@/components/auth-provider"
+import { auth } from "@/lib/firebase"
 
 type OrderTab = "current" | "completed" | "incomplete" | "history"
 
@@ -864,6 +865,16 @@ export default function OrdersPage() {
       if (status === "delivered") updates.deliveredAt = new Date()
       if (status === "failed") updates.deliveryAttempts = (order.deliveryAttempts ?? 0) + 1
       await updateOrder(order.id, updates)
+      if (status === "delivered") {
+        // Driver deliveries notify the store via /api/driver/.../status; an admin mark-delivered writes
+        // Firestore directly, so trigger the store callback here too (best-effort — never blocks the UI).
+        const token = await auth.currentUser?.getIdToken()
+        fetch("/api/admin/orders/notify-delivered", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+          body: JSON.stringify({ orderId: order.id }),
+        }).catch(() => {})
+      }
       logActivity({ action: "order.status_changed", resourceId: order.orderNumber, details: { status } })
       setOrderList((prev) => prev.map((o) => o.id === order.id ? { ...o, ...updates } : o))
       toast({ title: `Order marked as ${status}` })
