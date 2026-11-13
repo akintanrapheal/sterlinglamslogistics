@@ -310,6 +310,16 @@ export default function DispatchPage() {
       const updates: Partial<Order> = { status }
       if (status === "delivered") updates.deliveredAt = new Date()
       await updateOrder(order.id, updates)
+      if (status === "delivered") {
+        // Also tell the Sterlin Glams store (the driver flow does this automatically; an admin
+        // mark-delivered writes Firestore directly, so trigger the store callback here). Best-effort.
+        const headers = await getAdminHeaders()
+        fetch("/api/admin/orders/notify-delivered", {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ orderId: order.id }),
+        }).catch(() => {})
+      }
     } catch {
       setError("Failed to update order status")
     } finally { setIsSaving(false) }
