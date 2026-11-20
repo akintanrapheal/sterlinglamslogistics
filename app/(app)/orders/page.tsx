@@ -603,14 +603,6 @@ export default function OrdersPage() {
     }
   }
 
-  if (isLoading) {
-    return (
-      <div className="flex h-screen items-center justify-center">
-        <Spinner />
-      </div>
-    )
-  }
-
   // Memoised deliberately. These run over the full realtime list — up to 500
   // orders — and none of them depended on anything but orderList, yet all four
   // were recomputed on every render: every keystroke in search, every filter
@@ -1188,6 +1180,18 @@ export default function OrdersPage() {
       })
     }
     reader.readAsText(file)
+  }
+
+  // Loading guard lives here, AFTER every hook above. It used to sit before the
+  // useMemo() calls, which meant those hooks were skipped on the first (loading)
+  // render and ran once data arrived — changing the hook count between renders
+  // and crashing the page ("Rendered more hooks than during the previous render").
+  if (isLoading) {
+    return (
+      <div className="flex h-screen items-center justify-center">
+        <Spinner />
+      </div>
+    )
   }
 
   return (
