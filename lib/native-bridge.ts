@@ -210,15 +210,46 @@ export async function batteryExempt(): Promise<boolean | null> {
   }
 }
 
-/** Open the system dialog asking to be exempted. Driver's choice to grant. */
-export async function requestBatteryExemption(): Promise<void> {
+export interface BatteryExemptionResult {
+  /** True when the exemption was already granted; nothing was opened. */
+  exempt: boolean
+  /** Whether a settings screen actually opened. */
+  opened: boolean
+  /** Which route worked, or why none did. */
+  detail: string
+}
+
+/**
+ * Open the system dialog asking to be exempted. Driver's choice to grant.
+ *
+ * Returns what happened rather than nothing. This used to swallow every
+ * failure, so when the button did nothing on Samsung there was no signal at
+ * all to work from — not even whether the tap had reached this code.
+ */
+export async function requestBatteryExemption(): Promise<BatteryExemptionResult> {
   const plugin = (getCapacitor()?.Plugins as Record<string, unknown> | undefined)?.NativeTracker as
-    | { requestBatteryExemption?: () => Promise<unknown> }
+    | {
+        requestBatteryExemption?: () => Promise<{
+          exempt?: boolean
+          opened?: boolean
+          via?: string
+          errors?: string
+        }>
+      }
     | undefined
+  if (!plugin?.requestBatteryExemption) {
+    return { exempt: false, opened: false, detail: "not-a-native-build" }
+  }
   try {
-    await plugin?.requestBatteryExemption?.()
-  } catch {
-    /* ignore */
+    const res = await plugin.requestBatteryExemption()
+    if (res?.exempt) return { exempt: true, opened: false, detail: "already-granted" }
+    return {
+      exempt: false,
+      opened: Boolean(res?.opened),
+      detail: res?.opened ? `opened:${res?.via ?? "?"}` : (res?.errors ?? "no-route"),
+    }
+  } catch (err) {
+    return { exempt: false, opened: false, detail: `threw:${String(err)}` }
   }
 }
 

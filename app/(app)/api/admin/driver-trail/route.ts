@@ -109,6 +109,52 @@ function detectStops(points: TrailPoint[]): Stop[] {
   return stops
 }
 
+/**
+ * Replace each stop with a single point.
+ *
+ * A parked vehicle still produces fixes: GPS wanders by tens of metres, and
+ * those wandered fixes were drawn as route and then matched to roads, which
+ * turned a day spent at the shop into a confident lap of the block — 2.16 km
+ * of travel at 17.7 km/h that never happened.
+ *
+ * Collapsing a stop to one point means the line goes in, stops, and comes out,
+ * which is what occurred. The stop's own duration is already reported
+ * separately, so nothing is lost by not drawing its jitter.
+ */
+function collapseStops(points: TrailPoint[], stops: Stop[]): TrailPoint[] {
+  if (stops.length === 0) return points
+
+  const out: TrailPoint[] = []
+  for (const p of points) {
+    const stop = stops.find((s) => p.t >= s.from && p.t <= s.to)
+    if (!stop) {
+      out.push(p)
+      continue
+    }
+    // Keep the first fix of each stop as its anchor and drop the rest.
+    const already = out.length > 0 && out[out.length - 1].t >= stop.from && out[out.length - 1].t <= stop.to
+    if (!already) out.push({ lat: stop.lat, lng: stop.lng, t: stop.from })
+  }
+  return out
+}
+
+/**
+ * Whether a run is sampled densely enough to be matched to roads.
+ *
+ * Snapping interpolates along the road network between consecutive fixes, so
+ * given points minutes apart it will happily invent a detailed route through
+ * streets nobody drove. Dense sampling makes that interpolation a correction;
+ * sparse sampling makes it a fabrication.
+ */
+function denseEnoughToSnap(run: TrailPoint[]): boolean {
+  if (run.length < 3) return false
+  const gaps: number[] = []
+  for (let i = 1; i < run.length; i++) gaps.push(run[i].t - run[i - 1].t)
+  gaps.sort((a, b) => a - b)
+  const median = gaps[Math.floor(gaps.length / 2)]
+  return median <= 90_000
+}
+
 export async function GET(req: Request) {
   const admin = await verifyAdmin(req)
   if (!admin) return NextResponse.json({ ok: false, error: "Unauthorized" }, { status: 401 })
@@ -187,11 +233,13 @@ export async function GET(req: Request) {
       const d = metres(prev, cur)
       const dt = cur.t - prev.t
 
-      if (d <= MAX_PLAUSIBLE_JUMP_M) {
+      // A parked vehicle's GPS wanders tens of metres, and every wander was
+      // counted as distance travelled — which is how a day at the shop
+      // reported 2.16 km. Movement under the stop radius is treated as the
+      // noise it is, for distance as well as for moving time.
+      if (d <= MAX_PLAUSIBLE_JUMP_M && d > STOP_RADIUS_M) {
         distanceM += d
-        // Anything beyond the stop radius counts as travelling, so a driver
-        // sitting still doesn't accrue "moving" time.
-        if (d > STOP_RADIUS_M) movingMs += dt
+        movingMs += dt
       }
 
       // Prefer the device's own speed; derive it only when absent, since a
@@ -218,18 +266,24 @@ export async function GET(req: Request) {
     // Split before snapping, not after: each run is a separate journey, and
     // asking the Roads API to match across a gap invites it to invent a
     // plausible-looking route through streets nobody drove.
+    const stops = detectStops(points)
+
+    // Drawn from points with stops collapsed, while the summary and the stop
+    // list keep working from the raw fixes.
+    const drawable = collapseStops(points, stops)
+
     const runs: TrailPoint[][] = []
     let run: TrailPoint[] = []
-    for (let i = 0; i < points.length; i++) {
+    for (let i = 0; i < drawable.length; i++) {
       if (i > 0) {
-        const gapMs = points[i].t - points[i - 1].t
-        const gapM = metres(points[i - 1], points[i])
+        const gapMs = drawable[i].t - drawable[i - 1].t
+        const gapM = metres(drawable[i - 1], drawable[i])
         if (gapMs > MAX_PATH_GAP_MS || gapM > MAX_PLAUSIBLE_JUMP_M) {
           if (run.length > 0) runs.push(run)
           run = []
         }
       }
-      run.push(points[i])
+      run.push(drawable[i])
     }
     if (run.length > 0) runs.push(run)
 
@@ -239,13 +293,14 @@ export async function GET(req: Request) {
     for (const r of runs) {
       // A pair of points is not a route; snapping one would just be two
       // points on a road, so it is drawn as-is.
-      const snappedRun = wantSnap && r.length > 2 ? await snapTrailToRoads(r) : null
+      // Sparse runs are drawn raw. A fabricated route that looks precise is
+      // worse than an honest straight line between two known positions.
+      const snappedRun = wantSnap && denseEnoughToSnap(r) ? await snapTrailToRoads(r) : null
       if (snappedRun) anySnapped = true
       segments.push(snappedRun ?? r.map((p) => ({ lat: p.lat, lng: p.lng })))
     }
     const snapped = anySnapped ? segments.flat() : null
 
-    const stops = detectStops(points)
     const stoppedMs = stops.reduce((sum, s) => sum + s.durationMs, 0)
     const firstSeen = points[0].t
     const lastSeen = points[points.length - 1].t

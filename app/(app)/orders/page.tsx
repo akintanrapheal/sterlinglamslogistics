@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect, useRef } from "react"
+import { useState, useEffect, useRef, useMemo } from "react"
 import {
   Table,
   TableBody,
@@ -225,13 +225,27 @@ export default function OrdersPage() {
     if (missing.length === 0) return
 
     let cancelled = false
+    // Capped per visit.
+    //
+    // This geocoded every order missing coordinates, one at a time, on every
+    // load — and each result re-rendered the whole page and wrote to
+    // Firestore. A backlog of a few hundred meant the page thrashed for
+    // minutes while an admin tried to use it. The backlog still clears, a
+    // chunk per visit, without holding the page hostage.
+    const BACKFILL_PER_VISIT = 25
+    const batch = missing.slice(0, BACKFILL_PER_VISIT)
 
     async function backfillDistances() {
       try {
         await loadGoogleMaps()
         const geocoder = new google.maps.Geocoder()
 
-        for (const order of missing) {
+        // Results are accumulated and applied together, rather than one
+        // setState per order: each of those re-rendered a table of up to 500
+        // rows, so the geocoding was cheap and the re-rendering was not.
+        const done: Array<{ id: string; lat: number; lng: number; distanceKm: number }> = []
+
+        for (const order of batch) {
           if (cancelled) break
           try {
             const result = await new Promise<google.maps.GeocoderResult[] | null>((resolve) => {
@@ -253,9 +267,7 @@ export default function OrdersPage() {
             const distanceKm = haversineKm(HUB, coords)
 
             if (!cancelled) {
-              setOrderList((prev) =>
-                prev.map((o) => (o.id === order.id ? { ...o, ...coords, distanceKm } : o))
-              )
+              done.push({ id: order.id, ...coords, distanceKm })
               // Persist coordinates too — an order without lat/lng cannot be
               // plotted on the dispatch or driver map.
               updateOrder(order.id, { ...coords, distanceKm } as Partial<Order>).catch(() => {})
@@ -263,6 +275,15 @@ export default function OrdersPage() {
           } catch {
             // skip this order
           }
+        }
+        if (!cancelled && done.length > 0) {
+          const byId = new Map(done.map((d) => [d.id, d]))
+          setOrderList((prev) =>
+            prev.map((o) => {
+              const fix = byId.get(o.id)
+              return fix ? { ...o, lat: fix.lat, lng: fix.lng, distanceKm: fix.distanceKm } : o
+            }),
+          )
         }
       } catch {
         // Google Maps not available, skip
@@ -589,14 +610,30 @@ export default function OrdersPage() {
     )
   }
 
-  const currentOrders = orderList.filter(
-    (o) => ACTIVE_STATUSES.includes(o.status)
-  )
-  const completedOrders = orderList.filter((o) => o.status === ORDER_STATUS.DELIVERED)
-  const incompleteOrders = orderList.filter((o) => o.status === ORDER_STATUS.CANCELLED || o.status === ORDER_STATUS.FAILED)
-  const historyOrders = orderList.filter(
-    (o) => TERMINAL_STATUSES.includes(o.status)
-  )
+  // Memoised deliberately. These run over the full realtime list — up to 500
+  // orders — and none of them depended on anything but orderList, yet all four
+  // were recomputed on every render: every keystroke in search, every filter
+  // change, every geocode result arriving. Four passes over 500 orders per
+  // keypress is most of why this page felt slow.
+  const { currentOrders, completedOrders, incompleteOrders, historyOrders } = useMemo(() => {
+    // One pass instead of four. Same result, a quarter of the work.
+    const current: Order[] = []
+    const completed: Order[] = []
+    const incomplete: Order[] = []
+    const history: Order[] = []
+    for (const o of orderList) {
+      if (ACTIVE_STATUSES.includes(o.status)) current.push(o)
+      if (o.status === ORDER_STATUS.DELIVERED) completed.push(o)
+      if (o.status === ORDER_STATUS.CANCELLED || o.status === ORDER_STATUS.FAILED) incomplete.push(o)
+      if (TERMINAL_STATUSES.includes(o.status)) history.push(o)
+    }
+    return {
+      currentOrders: current,
+      completedOrders: completed,
+      incompleteOrders: incomplete,
+      historyOrders: history,
+    }
+  }, [orderList])
 
   const baseVisibleOrders =
     activeTab === "current"
@@ -607,7 +644,7 @@ export default function OrdersPage() {
           ? incompleteOrders
           : historyResults ?? historyOrders
 
-  const visibleOrders = (() => {
+  const visibleOrders = useMemo(() => {
     let list = activeTab === "history"
       ? baseVisibleOrders
       : searchQuery.trim() === ""
@@ -637,7 +674,16 @@ export default function OrdersPage() {
       })
     }
     return list
-  })()
+  }, [
+    activeTab,
+    baseVisibleOrders,
+    searchQuery,
+    statusFilter,
+    driverFilter,
+    paymentFilter,
+    dateFromFilter,
+    dateToFilter,
+  ])
 
   function toggleSort(col: string) {
     if (sortCol === col) setSortDir((d) => d === "asc" ? "desc" : "asc")
@@ -664,7 +710,7 @@ export default function OrdersPage() {
     )
   }
 
-  const sortedOrders = [...visibleOrders].sort((a, b) => {
+  const sortedOrders = useMemo(() => [...visibleOrders].sort((a, b) => {
     if (!sortCol) return 0
     const dir = sortDir === "asc" ? 1 : -1
     const val = (o: Order): string | number => {
@@ -689,12 +735,21 @@ export default function OrdersPage() {
     const av = val(a), bv = val(b)
     if (typeof av === "number" && typeof bv === "number") return (av - bv) * dir
     return String(av).localeCompare(String(bv)) * dir
-  })
+  }), [visibleOrders, sortCol, sortDir])
 
-  const visibleOrderIds = sortedOrders.map((o) => o.id)
-  const selectedVisibleCount = visibleOrderIds.filter((id) => selectedOrderIds.includes(id)).length
+  // A Set, not repeated indexOf. This ran once per visible row against the
+  // selected array, which is quadratic once a page is select-all'd.
+  const selectedIdSet = useMemo(() => new Set(selectedOrderIds), [selectedOrderIds])
+  const visibleOrderIds = useMemo(() => sortedOrders.map((o) => o.id), [sortedOrders])
+  const selectedVisibleCount = useMemo(
+    () => visibleOrderIds.reduce((n, id) => (selectedIdSet.has(id) ? n + 1 : n), 0),
+    [visibleOrderIds, selectedIdSet],
+  )
   const totalPages = Math.max(1, Math.ceil(sortedOrders.length / PAGE_SIZE))
-  const paginatedOrders = sortedOrders.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE)
+  const paginatedOrders = useMemo(
+    () => sortedOrders.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE),
+    [sortedOrders, page, PAGE_SIZE],
+  )
   const allVisibleSelected = visibleOrderIds.length > 0 && selectedVisibleCount === visibleOrderIds.length
   const someVisibleSelected = selectedVisibleCount > 0 && !allVisibleSelected
 
